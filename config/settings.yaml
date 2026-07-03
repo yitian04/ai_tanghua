@@ -1,0 +1,13 @@
+robot:
+  ip: "192.168.1.100"
+  dashboard_port: 29999
+  script_port: 30002
+  timeout: 5
+  connection_type: "script"
+
+output:
+  discharge_pin: 0
+
+ui:
+  title: "糖画机械臂控制系统"
+  refresh_interval: 2000

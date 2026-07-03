@@ -1,0 +1,225 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import streamlit as st
+from matplotlib.collections import LineCollection
+
+from apps.gui.views.file_naming import build_output_path, infer_prefix_from_path, sanitize_filename
+from src.core.models import Trajectory
+from src.pipeline.export.json_exporter import export_trajectory_json, load_curves_json, load_trajectory_json
+from src.pipeline.planning.planner import PlanningConfig, TrajectoryPlanner
+
+
+def _point_rows(trajectory: Trajectory, limit: int | None = None):
+    points = trajectory.points if limit is None else trajectory.points[:limit]
+    return [point.to_dict() for point in points]
+
+
+def _plot_trajectory_xy(trajectory: Trajectory):
+    fig, ax = plt.subplots(figsize=(4.4, 3.4), dpi=110)
+    drawing_segments = []
+    drawing_order = []
+    travel_x = []
+    travel_y = []
+    previous = None
+
+    for point in trajectory.points:
+        if point.drawing and previous and previous.drawing and previous.curve_id == point.curve_id:
+            drawing_segments.append([(previous.x_mm, previous.y_mm), (point.x_mm, point.y_mm)])
+            drawing_order.append(point.point_id)
+        if not point.drawing:
+            travel_x.append(point.x_mm)
+            travel_y.append(point.y_mm)
+        previous = point
+
+    if drawing_segments:
+        values = np.linspace(0.0, 1.0, len(drawing_segments))
+        line_collection = LineCollection(
+            drawing_segments,
+            cmap="viridis",
+            array=values,
+            linewidths=1.25,
+        )
+        ax.add_collection(line_collection)
+        colorbar = fig.colorbar(line_collection, ax=ax, fraction=0.045, pad=0.03)
+        colorbar.set_label("order", fontsize=7)
+        colorbar.set_ticks([0.0, 1.0])
+        colorbar.set_ticklabels(["early", "late"])
+        colorbar.ax.tick_params(labelsize=7)
+    if travel_x:
+        ax.scatter(travel_x, travel_y, s=8, color="#888888", alpha=0.75)
+
+    ax.set_aspect("equal", adjustable="box")
+    ax.autoscale_view()
+    ax.invert_yaxis()
+    ax.set_xlabel("robot X / mm")
+    ax.set_ylabel("robot Y / mm (down is larger)")
+    ax.set_title("XY preview: color order early -> late", fontsize=9)
+    ax.grid(True, alpha=0.25)
+    fig.tight_layout(pad=0.4)
+    return fig
+
+
+def _plot_trajectory_3d(trajectory: Trajectory):
+    fig = plt.figure(figsize=(4.4, 3.4), dpi=110)
+    ax = fig.add_subplot(111, projection="3d")
+    if trajectory.points:
+        xs = [point.x_mm for point in trajectory.points]
+        ys = [point.y_mm for point in trajectory.points]
+        zs = [point.z_mm for point in trajectory.points]
+        colors = ["tab:blue" if point.drawing else "tab:orange" for point in trajectory.points]
+        ax.plot(xs, ys, zs, linewidth=0.8, alpha=0.55)
+        ax.scatter(xs, ys, zs, c=colors, s=6)
+    ax.set_xlabel("X / mm")
+    ax.set_ylabel("Y / mm")
+    ax.set_zlabel("Z / mm")
+    ax.set_title("3D trajectory preview", fontsize=9)
+    fig.tight_layout(pad=0.4)
+    return fig
+
+
+def _render_trajectory_summary(trajectory: Trajectory) -> None:
+    drawing_points = sum(1 for point in trajectory.points if point.drawing)
+    travel_points = len(trajectory.points) - drawing_points
+
+    col_a, col_b, col_c, col_d = st.columns(4)
+    col_a.metric("ControlPoint 数量", len(trajectory.points))
+    col_b.metric("绘制点", drawing_points)
+    col_c.metric("空走/抬笔点", travel_points)
+    col_d.metric("预计总时间 s", f"{trajectory.metadata.get('estimated_total_time_s', 0.0):.2f}")
+
+    stat_a, stat_b, stat_c, stat_d = st.columns(4)
+    stat_a.metric("空走距离 mm", f"{trajectory.metadata.get('ordering_travel_distance_mm', 0.0):.1f}")
+    stat_b.metric("绘制长度 mm", f"{trajectory.metadata.get('drawing_length_mm', 0.0):.1f}")
+    stat_c.metric("优化器", trajectory.metadata.get("optimizer", "unknown"))
+    stat_d.metric("曲线数量", trajectory.metadata.get("curve_count", 0))
+
+    preview_mode = st.radio(
+        "预览内容",
+        ["XY 预览", "3D 预览", "ControlPointList", "字段说明"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    if preview_mode == "XY 预览":
+        fig = _plot_trajectory_xy(trajectory)
+        st.pyplot(fig, use_container_width=False)
+        plt.close(fig)
+    elif preview_mode == "3D 预览":
+        fig = _plot_trajectory_3d(trajectory)
+        st.pyplot(fig, use_container_width=False)
+        plt.close(fig)
+    elif preview_mode == "ControlPointList":
+        st.caption("中间格式是 Trajectory.points，即按执行顺序排列的 ControlPointList。")
+        st.dataframe(_point_rows(trajectory, limit=1000), use_container_width=True, hide_index=True, height=260)
+        if len(trajectory.points) > 1000:
+            st.caption(f"仅显示前 1000 行；完整数据在 trajectory.json 中，共 {len(trajectory.points)} 行。")
+    else:
+        st.json(
+            {
+                "Trajectory": {
+                    "coordinate_frame": trajectory.coordinate_frame,
+                    "tool_orientation_deg": trajectory.tool_orientation_deg,
+                    "metadata": trajectory.metadata,
+                    "points": "list[TrajectoryPoint]",
+                },
+                "TrajectoryPoint": {
+                    "point_id": "执行顺序编号",
+                    "curve_id": "来源曲线编号",
+                    "x_mm": "机器人基坐标系 X，单位 mm",
+                    "y_mm": "机器人基坐标系 Y，单位 mm",
+                    "z_mm": "机器人基坐标系 Z，单位 mm",
+                    "speed_mm_s": "该点目标速度，单位 mm/s",
+                    "drawing": "true 表示出料绘制；false 表示空走/抬笔",
+                },
+            }
+        )
+
+
+def render(config: dict, root_dir: str) -> None:
+    del config
+    st.subheader("轨迹规划")
+    st.caption("输入 curves.json，输出 robot-independent trajectory.json。")
+
+    generated_this_run = False
+    control_col, result_col = st.columns([0.9, 1.6])
+    with control_col:
+        curves_path = st.text_input("曲线文件路径", value=st.session_state.get("latest_curves_path", ""))
+
+        col_a, col_b, col_c = st.columns(3)
+        center_x = col_a.number_input("桌面中心 X mm", value=300.0)
+        center_y = col_b.number_input("桌面中心 Y mm", value=0.0)
+        draw_z = col_c.number_input("绘制 Z mm", value=50.0)
+
+        col_d, col_e, col_f = st.columns(3)
+        workspace_w = col_d.number_input("工作区宽 mm", value=300.0, min_value=1.0)
+        workspace_h = col_e.number_input("工作区高 mm", value=300.0, min_value=1.0)
+        rotation = col_f.number_input("旋转角 deg", value=0.0)
+
+        col_g, col_h, col_i = st.columns(3)
+        step = col_g.number_input("采样步长 mm", value=5.0, min_value=0.1)
+        lift_z = col_h.number_input("抬笔 Z mm", value=100.0)
+        use_lift = col_i.checkbox("启用抬笔", value=True)
+
+        col_j, col_k = st.columns(2)
+        draw_speed = col_j.number_input("绘制速度 mm/s", value=50.0, min_value=0.1)
+        travel_speed = col_k.number_input("空走速度 mm/s", value=150.0, min_value=0.1)
+        optimize_order = st.checkbox("优化曲线顺序以缩短时间", value=True)
+        opt_col_a, opt_col_b = st.columns(2)
+        exact_limit = opt_col_a.number_input("精确优化上限", value=10, min_value=0, max_value=14, step=1, disabled=not optimize_order)
+        two_opt_passes = opt_col_b.number_input("2-opt 轮数", value=30, min_value=0, max_value=200, step=5, disabled=not optimize_order)
+        generate_clicked = st.button("生成三维轨迹文件", type="primary", disabled=not curves_path, use_container_width=True)
+
+    with result_col:
+        if not curves_path:
+            st.info("选择或输入 curves.json 后生成轨迹预览。")
+
+    if generate_clicked:
+        source = Path(curves_path)
+        if not source.exists():
+            st.error("曲线文件不存在")
+            return
+
+        planner = TrajectoryPlanner(
+            PlanningConfig(
+                center_x_mm=center_x,
+                center_y_mm=center_y,
+                draw_z_mm=draw_z,
+                workspace_width_mm=workspace_w,
+                workspace_height_mm=workspace_h,
+                rotation_deg=rotation,
+                step_mm=step,
+                use_lift=use_lift,
+                lift_z_mm=lift_z,
+                drawing_speed_mm_s=draw_speed,
+                travel_speed_mm_s=travel_speed,
+                optimize_curve_order=optimize_order,
+                exact_order_limit=int(exact_limit),
+                two_opt_passes=int(two_opt_passes),
+            )
+        )
+        trajectory = planner.plan(load_curves_json(source))
+        prefix = sanitize_filename(
+            st.session_state.get("job_name") or infer_prefix_from_path(str(source), "trajectory"),
+            "trajectory",
+        )
+        st.session_state["job_name"] = prefix
+        output = build_output_path(root_dir, "trajectories", prefix, "trajectory", "json")
+        export_trajectory_json(trajectory, output)
+        st.session_state["latest_trajectory_path"] = str(output)
+        with result_col:
+            st.success(f"已输出：{output}")
+            _render_trajectory_summary(trajectory)
+        generated_this_run = True
+
+    latest = st.session_state.get("latest_trajectory_path")
+    if latest and Path(latest).exists() and not generated_this_run:
+        with result_col:
+            st.markdown("#### 最近轨迹文件")
+            st.code(latest)
+            try:
+                _render_trajectory_summary(load_trajectory_json(latest))
+            except Exception as exc:
+                st.warning(f"轨迹文件预览失败：{exc}")

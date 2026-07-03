@@ -1,0 +1,41 @@
+robot1:  # 机械臂名称
+  host: '192.168.3.111'
+  use_rt: True  # 是否使用实时控制
+  gripper:
+    result: True # 机械臂是否带夹爪
+    args:  # 夹爪参数
+      port: '/dev/dahuan'  # 夹爪端口
+      baudrate: 115200  # 波特率
+      bytesize: 8 # 数据位
+      parity: 'N' # 校验位
+      stopbits: 1  # 停止位
+      timeout: 1  # 超时时间
+  tcp: [0, 0, 0, 0, 0, 0]  # tcp位姿
+  payload:
+      pyload_weight: 2  # 负载重量 kg
+      payload_cog: [0.1, 0.1, 0.1]  # 负载中信心位置
+  gravity: (0, 0, -9.82)  # 机械臂重力方向
+  move_params:
+    acc: 0.04
+    vel: 0.5
+    wait: True
+    relative: False
+    threshold: null
+  limit: [0.10, 0.10, 0.50]
+
+
+# robot2:  # 机械臂名称
+#   host: '192.168.3.112'
+#   use_rt: False # 是否使用实时控制
+#   gripper: False # 机械臂是否带夹爪
+#   tcp: [1, 2, 3, 4, 5, 6]  # tcp位姿
+#   payload:
+#       pyload_weight: 2  # 负载重量 kg
+#       payload_cog: [0.1, 0.1, 0.1]  # 负载中信心位置
+#   gravity: (0, 0, -9.82)  # 机械臂重力方向
+#   move_params: # 机械臂运动参数
+#     acc: 0.4
+#     vel: 0.5
+#     wait: True
+#     relative: False
+#     threshold: null

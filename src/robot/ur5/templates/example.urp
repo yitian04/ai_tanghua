@@ -1,0 +1,21 @@
+﻿<URProgram name="tanghua_template" installation="default" installationRelativePath="../../programs/default" directory="/programs/usbdisk" createdIn="3.15.6.0" lastSavedIn="3.15.8.106339">
+  <kinematics status="LINEARIZED" validChecksum="false">
+    <deltaTheta value="0, 0, 0, 0, 0, 0"></deltaTheta>
+    <a value="0, -0.425, -0.3922, 0, 0, 0"></a>
+    <d value="0.1625, 0, 0, 0.1333, 0.0997, 0.0996"></d>
+    <alpha value="1.5707963267948966, 0, 0, 1.5707963267948966, -1.5707963267948966, 0"></alpha>
+    <jointChecksum value="0, 0, 0, 0, 0, 0"></jointChecksum>
+  </kinematics>
+  <children>
+    <MainProgram runOnlyOnce="true" InitVariablesNode="false">
+      <children>
+        <Script type="File">
+          <cachedContents>def Program():
+end
+Program()</cachedContents>
+          <file>example.script</file>
+        </Script>
+      </children>
+    </MainProgram>
+  </children>
+</URProgram>

@@ -5,10 +5,12 @@ from pathlib import Path
 from typing import Dict
 
 import streamlit as st
+import yaml
 
+from apps.gui.views.ur_execution_controls import execution_profile_caption
 from src.robot.job_loader import load_trajectory_file
-from src.robot.mock import MockRobotAdapter
 from src.robot.ur5 import UR5RobotAdapter
+from src.robot.ur5.execution_profile import execution_profile_from_config
 
 
 def _create_ur5(config: Dict) -> UR5RobotAdapter:
@@ -82,7 +84,33 @@ def _render_realtime_state() -> None:
             col.metric(f"J{idx}", f"{value:.2f}°", delta=f"{speed:.2f}°/s")
 
 
-def _render_ur5_control(config: Dict) -> None:
+def _save_tcp_orientation_as_planning_default(root_dir: str, tcp_pose_mm_deg) -> Path:
+    if not tcp_pose_mm_deg or len(tcp_pose_mm_deg) < 6:
+        raise ValueError("current TCP pose does not contain rotation vector")
+    rx_deg, ry_deg, rz_deg = [float(value) for value in tcp_pose_mm_deg[3:6]]
+    config_path = Path(root_dir) / "config" / "settings.yaml"
+    try:
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except FileNotFoundError:
+        config = {}
+    if not isinstance(config, dict):
+        config = {}
+    planning = config.get("planning")
+    if not isinstance(planning, dict):
+        planning = {}
+    planning["tool_rx_deg"] = rx_deg
+    planning["tool_ry_deg"] = ry_deg
+    planning["tool_rz_deg"] = rz_deg
+    config["planning"] = planning
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    st.session_state["planning_tool_rx_deg"] = rx_deg
+    st.session_state["planning_tool_ry_deg"] = ry_deg
+    st.session_state["planning_tool_rz_deg"] = rz_deg
+    return config_path
+
+
+def _render_ur5_control(config: Dict, root_dir: str) -> None:
     del config
     robot = st.session_state.ur5_robot
     ip_ready = bool(st.session_state.get("robot_ip", "").strip())
@@ -106,7 +134,7 @@ def _render_ur5_control(config: Dict) -> None:
 
     action_cols = st.columns(3)
     with action_cols[0]:
-        if st.button("测试 Dashboard", use_container_width=True, disabled=controls_disabled):
+        if st.button("测试 Dashboard", width="stretch", disabled=controls_disabled):
             result = robot.test_connection()
             st.session_state.connection_test = {
                 "tested": True,
@@ -118,11 +146,11 @@ def _render_ur5_control(config: Dict) -> None:
             }
             _add_log(f"连接检测：dashboard={'可用' if result.get('dashboard_ok') else '不可用'}")
     with action_cols[1]:
-        if st.button("刷新状态", use_container_width=True, disabled=controls_disabled):
+        if st.button("刷新状态", width="stretch", disabled=controls_disabled):
             _refresh_status()
             _add_log("状态已刷新")
     with action_cols[2]:
-        if st.button("停止程序", use_container_width=True, disabled=controls_disabled):
+        if st.button("停止程序", width="stretch", disabled=controls_disabled):
             ok = robot.stop_program()
             _add_log("停止程序命令已发送" if ok else f"停止失败：{robot.last_dashboard_response}")
             _refresh_status()
@@ -131,19 +159,19 @@ def _render_ur5_control(config: Dict) -> None:
     st.markdown("### 电源与使能")
     power_cols = st.columns(3)
     with power_cols[0]:
-        if st.button("上电 Power On", use_container_width=True, disabled=controls_disabled, type="primary"):
+        if st.button("上电 Power On", width="stretch", disabled=controls_disabled, type="primary"):
             ok = robot.power_on()
             _add_log("上电命令已发送" if ok else f"上电失败：{robot.last_dashboard_response}")
             time.sleep(1.0)
             _refresh_status()
     with power_cols[1]:
-        if st.button("使能/松刹车", use_container_width=True, disabled=controls_disabled, type="primary"):
+        if st.button("使能/松刹车", width="stretch", disabled=controls_disabled, type="primary"):
             ok = robot.brake_release()
             _add_log("使能/松刹车命令已发送" if ok else f"使能失败：{robot.last_dashboard_response}")
             time.sleep(1.0)
             _refresh_status()
     with power_cols[2]:
-        if st.button("下电 Power Off", use_container_width=True, disabled=controls_disabled):
+        if st.button("下电 Power Off", width="stretch", disabled=controls_disabled):
             ok = robot.power_off()
             _add_log("下电命令已发送" if ok else f"下电失败：{robot.last_dashboard_response}")
             time.sleep(1.0)
@@ -160,18 +188,18 @@ def _render_ur5_control(config: Dict) -> None:
     cols[4].metric("安全状态", status.get("safety_status", "unknown"))
 
     st.divider()
-    st.markdown("### 收纳动作")
-    st.caption("目标六轴角度：J1=95°，J2=-100°，J3=157°，J4=-60°，J5=0°，J6=20°。执行速度限制为 10%。")
-    st.session_state.storage_confirmed = st.checkbox("我确认机械臂周围无人、无障碍物，允许低速回到收纳状态", value=st.session_state.storage_confirmed, disabled=locked)
-    if st.button("回到收纳状态", use_container_width=True, type="primary", disabled=controls_disabled or not st.session_state.storage_confirmed):
+    st.markdown("### 准备姿态")
+    st.caption("目标六轴角度：J1=45°，J2=-92°，J3=123°，J4=-32°，J5=41°，J6=16.68°。执行速度限制为 10%。")
+    st.session_state.storage_confirmed = st.checkbox("我确认机械臂周围无人、无障碍物，允许低速回到准备姿态", value=st.session_state.storage_confirmed, disabled=locked)
+    if st.button("回到准备姿态", width="stretch", type="primary", disabled=controls_disabled or not st.session_state.storage_confirmed):
         st.session_state.motion_in_progress = True
         try:
-            result = robot.movej_degrees([95, -100, 157, -60, 0, 20], speed_fraction=0.1)
-            _add_log(result.get("message", "收纳动作完成" if result.get("ok") else "收纳动作失败"))
+            result = robot.movej_degrees([45, -92, 123, -32, 41, 16.68], speed_fraction=0.1)
+            _add_log(result.get("message", "准备姿态动作完成" if result.get("ok") else "准备姿态动作失败"))
             if result.get("ok"):
-                st.success(result.get("message", "收纳动作完成"))
+                st.success(result.get("message", "准备姿态动作完成"))
             else:
-                st.error(result.get("message", "收纳动作失败"))
+                st.error(result.get("message", "准备姿态动作失败"))
             _refresh_status()
         finally:
             st.session_state.motion_in_progress = False
@@ -179,16 +207,31 @@ def _render_ur5_control(config: Dict) -> None:
 
     st.divider()
     st.markdown("### 实时位姿")
-    realtime_cols = st.columns([1, 1, 2])
-    read_realtime = realtime_cols[0].button("读取实时状态", use_container_width=True, disabled=controls_disabled)
+    realtime_cols = st.columns([1, 1, 1.3, 1.7])
+    read_realtime = realtime_cols[0].button("读取实时状态", width="stretch", disabled=controls_disabled)
     auto_refresh = realtime_cols[1].checkbox("1 秒刷新", value=False, disabled=controls_disabled)
-    realtime_cols[2].caption("TCP 单位 mm；关节和姿态单位为度。")
+    use_current_pose = realtime_cols[2].button("使用当前TCP姿态", width="stretch", disabled=controls_disabled)
+    realtime_cols[3].caption("TCP 单位 mm；姿态为 rotation vector，单位 deg，不是 RPY。")
+
+    if use_current_pose:
+        _render_realtime_state()
+        realtime = st.session_state.get("realtime_state", {})
+        if realtime.get("ok"):
+            try:
+                saved_path = _save_tcp_orientation_as_planning_default(root_dir, realtime.get("tcp_pose_mm_deg"))
+                tcp = realtime.get("tcp_pose_mm_deg", [])
+                st.success(f"已设为轨迹默认工具姿态：Rx={tcp[3]:.3f}°, Ry={tcp[4]:.3f}°, Rz={tcp[5]:.3f}°")
+                _add_log(f"TCP 姿态已写入规划默认值：{saved_path}")
+            except Exception as exc:
+                st.error(f"写入默认工具姿态失败：{exc}")
+        else:
+            st.error(f"读取实时 TCP 失败：{realtime.get('error', 'unknown')}")
+
     if read_realtime or auto_refresh or st.session_state.get("realtime_state", {}).get("ok"):
         _render_realtime_state()
         if auto_refresh:
             time.sleep(1.0)
             st.rerun()
-
     with st.expander("最近响应与日志", expanded=False):
         st.code(status.get("last_response") or robot.last_dashboard_response or st.session_state.connection_test.get("message") or "暂无响应")
         if st.session_state.connection_test.get("ping_output"):
@@ -201,10 +244,11 @@ def _render_ur5_control(config: Dict) -> None:
 def _render_job_execution(config: Dict, root_dir: str) -> None:
     st.divider()
     st.markdown("### 数字轨迹执行")
-    robot_type = st.selectbox("执行适配器", ["mock", "ur5"], index=0)
+    st.caption("执行适配器：UR5。调试请先在数字文件页导出 URP 或检查 trajectory.json。")
     trajectory_path = st.text_input("轨迹文件路径", value=st.session_state.get("latest_trajectory_path", ""))
-    output_pin = int(config.get("output", {}).get("discharge_pin", 0))
-    output_pin = st.number_input("出料数字输出 pin", min_value=0, max_value=7, value=output_pin, step=1)
+    profile = execution_profile_from_config(config)
+    st.caption("直接发送 URScript 执行，不生成 URP。")
+    st.caption(execution_profile_caption(profile))
     execute_confirmed = st.checkbox("我确认轨迹文件、工作空间和机械臂现场状态均允许执行")
 
     if st.button("执行轨迹文件", type="primary", disabled=not trajectory_path or not execute_confirmed or st.session_state.get("motion_in_progress", False)):
@@ -213,20 +257,20 @@ def _render_job_execution(config: Dict, root_dir: str) -> None:
             st.error("轨迹文件不存在")
             return
         trajectory = load_trajectory_file(source)
-        adapter = MockRobotAdapter() if robot_type == "mock" else st.session_state.ur5_robot
-        if robot_type == "mock":
-            adapter.connect("mock")
-        else:
-            _sync_ip()
+        _sync_ip()
 
         st.session_state.motion_in_progress = True
         try:
-            result = adapter.execute_trajectory(trajectory, output_pin=int(output_pin))
+            result = st.session_state.ur5_robot.execute_trajectory(
+                trajectory,
+                output_pin=profile.output_pin,
+                **profile.compile_options(),
+            )
             if result.ok:
                 st.success(result.message)
             else:
                 st.error(result.message)
-            _add_log(f"{robot_type} 执行：{result.message}")
+            _add_log(f"UR5 执行：{result.message}")
         finally:
             st.session_state.motion_in_progress = False
 
@@ -237,9 +281,7 @@ def _render_job_execution(config: Dict, root_dir: str) -> None:
             st.caption("最近数字文件")
             for item in latest:
                 st.text(str(item))
-
-
 def render(config: Dict, root_dir: str) -> None:
     _init_state(config)
-    _render_ur5_control(config)
+    _render_ur5_control(config, root_dir)
     _render_job_execution(config, root_dir)

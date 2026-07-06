@@ -6,7 +6,7 @@ from pathlib import Path
 from src.core.models import Trajectory, TrajectoryPoint
 
 
-FIELDNAMES = ["point_id", "curve_id", "x_mm", "y_mm", "z_mm", "speed_mm_s", "drawing"]
+FIELDNAMES = ["point_id", "curve_id", "x_mm", "y_mm", "z_mm", "rx_deg", "ry_deg", "rz_deg", "speed_mm_s", "drawing"]
 
 
 def export_trajectory_csv(trajectory: Trajectory, path: str | Path) -> Path:
@@ -33,6 +33,9 @@ def load_trajectory_csv(path: str | Path) -> Trajectory:
                     z_mm=float(row["z_mm"]),
                     speed_mm_s=float(row["speed_mm_s"]),
                     drawing=str(row["drawing"]).strip().lower() in {"1", "true", "yes", "on"},
+                    rx_deg=float(row.get("rx_deg") or row.get("rx") or 0.0),
+                    ry_deg=float(row.get("ry_deg") or row.get("ry") or 180.0),
+                    rz_deg=float(row.get("rz_deg") or row.get("rz") or 0.0),
                 )
             )
     return Trajectory(points=points)

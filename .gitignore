@@ -1,4 +1,6 @@
 data/
+tools/*
+!tools/README.md
 .venv/
 __pycache__/
 *.py[cod]

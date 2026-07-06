@@ -37,4 +37,4 @@ def render(config: dict, root_dir: str) -> None:
     if latest and Path(latest).exists():
         st.markdown("#### 最近图片")
         st.code(latest)
-        st.image(latest, use_container_width=True)
+        st.image(latest, width="stretch")

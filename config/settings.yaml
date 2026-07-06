@@ -1,13 +1,36 @@
 robot:
-  ip: "192.168.1.100"
+  ip: 192.168.1.100
   dashboard_port: 29999
   script_port: 30002
   timeout: 5
-  connection_type: "script"
-
+  connection_type: script
 output:
   discharge_pin: 0
-
 ui:
-  title: "糖画机械臂控制系统"
+  title: 糖画机械臂控制系统
   refresh_interval: 2000
+planning:
+  curves_path: D:\ai\tanghua_project\data\curves\star_20260706_185605_curves.json
+  center_x_mm: -126.0
+  center_y_mm: -587.0
+  draw_z_mm: 250.0
+  tool_rx_deg: -3.3683298935302184
+  tool_ry_deg: 73.85115554852769
+  tool_rz_deg: 3.000443126925613
+  workspace_width_mm: 300.0
+  workspace_height_mm: 300.0
+  rotation_deg: 0.0
+  step_mm: 5.0
+  lift_z_mm: 10.0
+  use_lift: true
+  drawing_speed_mm_s: 250.0
+  travel_speed_mm_s: 400.0
+  optimize_curve_order: true
+  exact_order_limit: 10
+  two_opt_passes: 30
+execution:
+  output_on_delay_ms: 0.0
+  output_off_delay_ms: 0.0
+  blend_radius_mm: 5.0
+  max_speed_mm_s: 500.0
+  acceleration_m_s2: 0.5

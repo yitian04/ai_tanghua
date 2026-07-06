@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 from pathlib import Path
@@ -7,7 +7,7 @@ from typing import Dict
 import streamlit as st
 import yaml
 
-from apps.gui.views import design_page, export_page, planning_page, robot_page, vector_page
+from apps.gui.views import design_page, export_page, one_click_page, planning_page, robot_page, vector_page
 
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -19,6 +19,7 @@ WORKFLOW_STATE_KEYS = [
     "latest_image_path",
     "latest_curves_path",
     "latest_trajectory_path",
+    "one_click_upload",
     "realtime_state",
     "connection_test",
     "robot_status",
@@ -184,6 +185,7 @@ def main() -> None:
     apply_dense_layout()
     st.markdown('<div class="app-title">糖画机械臂控制系统</div>', unsafe_allow_html=True)
     pages = {
+        "一键绘制": one_click_page.render,
         "设计输入": design_page.render,
         "图像转曲线": vector_page.render,
         "轨迹规划": planning_page.render,
@@ -201,13 +203,13 @@ def main() -> None:
         st.divider()
         st.caption("前四个模块只生成数字文件；机器人控制页负责加载文件并执行。")
         with st.expander("历史数据"):
-            if st.button("清除当前会话记录", use_container_width=True):
+            if st.button("清除当前会话记录", width="stretch"):
                 clear_workflow_state()
                 st.rerun()
 
             delete_files = st.checkbox("同时清空 data 下的中间文件")
             confirm_text = st.text_input("输入 CLEAR 确认清空文件", disabled=not delete_files)
-            if st.button("清空历史文件", use_container_width=True, disabled=not (delete_files and confirm_text == "CLEAR")):
+            if st.button("清空历史文件", width="stretch", disabled=not (delete_files and confirm_text == "CLEAR")):
                 deleted = clear_generated_files(ROOT_DIR)
                 clear_workflow_state()
                 st.success(f"已删除 {deleted} 个文件")

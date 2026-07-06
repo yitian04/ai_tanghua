@@ -19,7 +19,7 @@ class PlanningConfig:
     rotation_deg: float = 0.0
     step_mm: float = 5.0
     use_lift: bool = True
-    lift_z_mm: float = 100.0
+    lift_z_mm: float = 10.0
     drawing_speed_mm_s: float = 50.0
     travel_speed_mm_s: float = 150.0
     tool_orientation_deg: Tuple[float, float, float] = (0.0, 180.0, 0.0)
@@ -257,7 +257,7 @@ class TrajectoryPlanner:
         travel_time = travel_distance / travel_speed
         lift_time = 0.0
         if self.config.use_lift:
-            lift_distance = abs(float(self.config.lift_z_mm) - float(self.config.draw_z_mm)) * 2.0 * len(curves)
+            lift_distance = max(0.0, float(self.config.lift_z_mm)) * 2.0 * len(curves)
             lift_time = lift_distance / travel_speed
         return {
             "drawing_time_s": drawing_time,
@@ -275,16 +275,19 @@ class TrajectoryPlanner:
                 continue
             if self.config.use_lift:
                 x, y = sampled[0]
-                output.append(self._make_point(point_id, curve.curve_id, x, y, self.config.lift_z_mm, self.config.travel_speed_mm_s, False))
+                output.append(self._make_point(point_id, curve.curve_id, x, y, self._lift_z_mm(), self.config.travel_speed_mm_s, False))
                 point_id += 1
             for x, y in sampled:
                 output.append(self._make_point(point_id, curve.curve_id, x, y, self.config.draw_z_mm, self.config.drawing_speed_mm_s, True))
                 point_id += 1
             if self.config.use_lift:
                 x, y = sampled[-1]
-                output.append(self._make_point(point_id, curve.curve_id, x, y, self.config.lift_z_mm, self.config.travel_speed_mm_s, False))
+                output.append(self._make_point(point_id, curve.curve_id, x, y, self._lift_z_mm(), self.config.travel_speed_mm_s, False))
                 point_id += 1
         return output
+
+    def _lift_z_mm(self) -> float:
+        return float(self.config.draw_z_mm) + max(0.0, float(self.config.lift_z_mm))
 
     def _sample_polyline(self, points: List[List[float]]) -> List[List[float]]:
         if len(points) < 2:
@@ -302,8 +305,8 @@ class TrajectoryPlanner:
                 ])
         return sampled
 
-    @staticmethod
-    def _make_point(point_id: int, curve_id: int, x: float, y: float, z: float, speed: float, drawing: bool) -> TrajectoryPoint:
+    def _make_point(self, point_id: int, curve_id: int, x: float, y: float, z: float, speed: float, drawing: bool) -> TrajectoryPoint:
+        rx_deg, ry_deg, rz_deg = self.config.tool_orientation_deg
         return TrajectoryPoint(
             point_id=point_id,
             curve_id=curve_id,
@@ -312,6 +315,9 @@ class TrajectoryPlanner:
             z_mm=float(z),
             speed_mm_s=float(speed),
             drawing=bool(drawing),
+            rx_deg=float(rx_deg),
+            ry_deg=float(ry_deg),
+            rz_deg=float(rz_deg),
         )
 
     @staticmethod

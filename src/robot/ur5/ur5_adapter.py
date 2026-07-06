@@ -253,10 +253,10 @@ class UR5RobotAdapter(RobotAdapter):
         target_radians = [self._deg_to_rad(value) for value in target_degrees]
         target_literal = "[" + ", ".join(f"{value:.6f}" for value in target_radians) + "]"
         script = (
-            "def slow_storage_move():\n"
+            "def slow_joint_move():\n"
             f"  movej({target_literal}, a={acceleration:.4f}, v={velocity:.4f})\n"
             "end\n"
-            "slow_storage_move()"
+            "slow_joint_move()"
         )
 
         if not self._send_script(script):
@@ -275,7 +275,7 @@ class UR5RobotAdapter(RobotAdapter):
                     if max_error <= tolerance_deg:
                         return {
                             "ok": True,
-                            "message": f"已到达收纳状态，最大关节误差 {max_error:.2f}°",
+                            "message": f"已到达目标关节姿态，最大关节误差 {max_error:.2f}°",
                             "speed_response": speed_result.get("response", ""),
                             "realtime": realtime,
                         }
@@ -288,12 +288,12 @@ class UR5RobotAdapter(RobotAdapter):
                     if max_error <= tolerance_deg * 2:
                         return {
                             "ok": True,
-                            "message": f"程序停止，关节已接近收纳状态，最大误差 {max_error:.2f}°",
+                            "message": f"程序停止，关节已接近目标关节姿态，最大误差 {max_error:.2f}°",
                             "speed_response": speed_result.get("response", ""),
                             "realtime": last_realtime,
                         }
 
-        return {"ok": False, "message": "等待收纳运动完成超时，请检查机器人状态", "realtime": last_realtime}
+        return {"ok": False, "message": "等待关节运动完成超时，请检查机器人状态", "realtime": last_realtime}
 
     def get_realtime_state(self) -> Dict:
         if not self.ip_address:
@@ -369,6 +369,9 @@ class UR5RobotAdapter(RobotAdapter):
                         z_mm=float(point.get("z_mm", point.get("z", 0.0))),
                         speed_mm_s=float(point.get("speed_mm_s", point.get("speed", 50.0))),
                         drawing=bool(point.get("drawing", point.get("is_drawing", True))),
+                        rx_deg=float(point.get("rx_deg", point.get("rx", point.get("tool_rx_deg", 0.0)))),
+                        ry_deg=float(point.get("ry_deg", point.get("ry", point.get("tool_ry_deg", 180.0)))),
+                        rz_deg=float(point.get("rz_deg", point.get("rz", point.get("tool_rz_deg", 0.0)))),
                     )
                 )
         return Trajectory(points=converted)

@@ -67,6 +67,9 @@ class TrajectoryPoint:
     z_mm: float
     speed_mm_s: float
     drawing: bool
+    rx_deg: float = 0.0
+    ry_deg: float = 180.0
+    rz_deg: float = 0.0
     curve_id: int = 0
     point_id: int = 0
 
@@ -81,6 +84,9 @@ class TrajectoryPoint:
             z_mm=float(data["z_mm"]),
             speed_mm_s=float(data.get("speed_mm_s", data.get("speed", 50.0))),
             drawing=bool(data.get("drawing", data.get("is_drawing", True))),
+            rx_deg=float(data.get("rx_deg", data.get("rx", data.get("tool_rx_deg", 0.0)))),
+            ry_deg=float(data.get("ry_deg", data.get("ry", data.get("tool_ry_deg", 180.0)))),
+            rz_deg=float(data.get("rz_deg", data.get("rz", data.get("tool_rz_deg", 0.0)))),
             curve_id=int(data.get("curve_id", 0)),
             point_id=int(data.get("point_id", 0)),
         )
@@ -103,10 +109,19 @@ class Trajectory:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Trajectory":
+        tool_orientation = [float(v) for v in data.get("tool_orientation_deg", [0.0, 180.0, 0.0])]
+        if len(tool_orientation) != 3:
+            tool_orientation = [0.0, 180.0, 0.0]
+        points = []
+        for item in data.get("points", []):
+            point_data = dict(item)
+            if not any(key in point_data for key in ("rx_deg", "ry_deg", "rz_deg", "rx", "ry", "rz")):
+                point_data["rx_deg"], point_data["ry_deg"], point_data["rz_deg"] = tool_orientation
+            points.append(TrajectoryPoint.from_dict(point_data))
         return cls(
-            points=[TrajectoryPoint.from_dict(item) for item in data.get("points", [])],
+            points=points,
             coordinate_frame=data.get("coordinate_frame", "robot_base"),
-            tool_orientation_deg=[float(v) for v in data.get("tool_orientation_deg", [0.0, 180.0, 0.0])],
+            tool_orientation_deg=tool_orientation,
             metadata=dict(data.get("metadata", {})),
         )
 
@@ -127,4 +142,3 @@ class CommandResult:
     ok: bool
     message: str = ""
     data: Dict[str, Any] = field(default_factory=dict)
-

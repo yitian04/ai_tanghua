@@ -1,0 +1,104 @@
+﻿@startuml
+' Tanghua project system architecture
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam packageStyle rectangle
+skinparam defaultFontName Microsoft YaHei
+left to right direction
+
+title AI 糖画机械臂项目 - 系统架构
+
+actor "用户" as user
+
+package "apps/gui - Streamlit 8501" as gui {
+  component "app.py\n页面路由/全局布局" as app
+  component "一键绘制页\none_click_page.py" as oneclick
+  component "设计输入页\ndesign_page.py" as design
+  component "图像转曲线页\nvector_page.py" as vectorpage
+  component "轨迹规划页\nplanning_page.py" as planningpage
+  component "数字文件页\nexport_page.py" as exportpage
+  component "机械臂控制页\nrobot_page.py" as robotpage
+  component "URScript参数控件\nur_execution_controls.py" as urcontrols
+}
+
+package "前半段 - 机器人无关流水线" as frontend {
+  component "图像处理与矢量化\nsrc/modules/image_process_module.py" as imageproc
+  component "CLI SVG 后端\nsrc/pipeline/vectorization" as vectorcli
+  component "轨迹规划\nsrc/pipeline/planning/planner.py" as planner
+  component "通用导出\nsrc/pipeline/export\nJSON / CSV / G-code" as genericexport
+}
+
+package "核心数据模型" as core {
+  component "ImageResult" as image_result
+  component "Curve2D" as curve2d
+  component "CurveList" as curvelist
+  component "TrajectoryPoint" as trajectorypoint
+  component "Trajectory" as trajectory
+}
+
+package "后半段 - UR5 适配层" as robotpkg {
+  component "RobotAdapter 接口" as robotadapter
+  component "UR5RobotAdapter\nsrc/robot/ur5/ur5_adapter.py" as ur5
+  component "URScriptBuilder\nsrc/robot/ur5/urscript_builder.py" as builder
+  component "URScriptExecutionProfile\nsrc/robot/ur5/execution_profile.py" as profile
+  component "URP Exporter\nsrc/pipeline/export/urscript_exporter.py" as urpexport
+  component "URP Template\nsrc/robot/ur5/templates/example.urp" as template
+}
+
+database "data/\n临时与交付文件\nimages / curves / trajectories / exports" as data
+file "config/settings.yaml\n默认值" as config
+
+node "UR5 控制器" as urcontroller {
+  component "Dashboard 29999" as dashboard
+  component "Script Socket 30002" as scriptsocket
+  component "Realtime 30003" as realtime
+}
+
+node "可选 CLI 工具" as tools {
+  component "VTracer" as vtracer
+  component "Potrace" as potrace
+}
+
+user --> app
+app --> oneclick
+app --> design
+app --> vectorpage
+app --> planningpage
+app --> exportpage
+app --> robotpage
+
+oneclick --> imageproc
+oneclick --> planner
+oneclick --> ur5
+oneclick --> data
+vectorpage --> imageproc
+vectorpage --> data
+planningpage --> planner
+planningpage --> data
+exportpage --> genericexport
+exportpage --> urpexport
+robotpage --> ur5
+exportpage --> urcontrols
+robotpage --> profile
+urcontrols --> config
+planningpage --> config
+robotpage --> config
+oneclick --> config
+
+imageproc --> curvelist
+imageproc --> vectorcli
+vectorcli --> tools
+planner --> trajectory
+planner --> curvelist
+genericexport --> trajectory
+urpexport --> builder
+urpexport --> template
+ur5 --> robotadapter
+ur5 --> builder
+ur5 --> urcontroller
+builder --> profile
+builder --> trajectory
+curvelist --> curve2d
+trajectory --> trajectorypoint
+
+@enduml

@@ -1,0 +1,55 @@
+﻿@startuml
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName Microsoft YaHei
+
+title UR5 执行与 URP 导出一致性
+
+component "trajectory.json\nTrajectory" as traj
+component "config.execution\nURScript默认参数" as execconf
+component "URScriptExecutionProfile" as profile
+component "URScriptBuilder\ncompile_urscript()" as builder
+component "URP Exporter\nexport_trajectory_urscript()" as urpexporter
+component "example.urp 模板" as template
+component "机械臂页直接执行\nrobot_page" as robotpage
+component "数字文件页导出\nexport_page" as exportpage
+node "UR5控制器" as ur5 {
+  component "Script Socket 30002" as socket
+  component "Dashboard 29999" as dashboard
+}
+file "*.urp" as urp
+file "*.script / cachedContents" as cached
+
+execconf --> profile : output delay / blend / speed / acceleration
+traj --> builder
+profile --> builder
+
+robotpage --> profile
+robotpage --> traj
+robotpage --> dashboard : check_motion_ready()
+robotpage --> builder : compile_urscript()
+builder --> socket : 直接发送URScript
+
+exportpage --> profile
+exportpage --> traj
+exportpage --> urpexporter
+urpexporter --> builder : 同一入口生成脚本
+urpexporter --> template
+urpexporter --> urp
+urp --> cached : cachedContents = script
+
+note right of builder
+生成脚本包含:
+1. set_digital_out(DO0, False)
+2. movej(准备姿态)
+3. movel轨迹点(DO/速度/blend)
+4. movej(准备姿态)
+end note
+
+note bottom of profile
+这些是UR5/URScript后端参数
+保存在 config.execution
+不进入通用 trajectory.json
+end note
+
+@enduml

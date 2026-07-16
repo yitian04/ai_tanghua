@@ -1,0 +1,105 @@
+﻿@startuml
+skinparam shadowing false
+skinparam defaultFontName Microsoft YaHei
+skinparam classAttributeIconSize 0
+
+title 核心数据模型
+
+class ImageResult {
+  +path: str
+  +source: str
+  +metadata: Dict[str, Any]
+}
+
+class Curve2D {
+  +points: List[List[float]]
+  +curve_id: int
+  +closed: bool
+  +start(): List[float]
+  +end(): List[float]
+  +reversed(): Curve2D
+  +to_dict(): Dict
+  +from_dict(data): Curve2D
+}
+
+class CurveList {
+  +curves: List[Curve2D]
+  +coordinate_frame: str = "image_px"
+  +metadata: Dict[str, Any]
+  +to_dict(): Dict
+  +from_dict(data): CurveList
+}
+
+class TrajectoryPoint {
+  +x_mm: float
+  +y_mm: float
+  +z_mm: float
+  +speed_mm_s: float
+  +drawing: bool
+  +rx_deg: float
+  +ry_deg: float
+  +rz_deg: float
+  +curve_id: int
+  +point_id: int
+  +to_dict(): Dict
+  +from_dict(data): TrajectoryPoint
+}
+
+class Trajectory {
+  +points: List[TrajectoryPoint]
+  +coordinate_frame: str = "robot_base"
+  +tool_orientation_deg: List[float]
+  +metadata: Dict[str, Any]
+  +to_dict(): Dict
+  +from_dict(data): Trajectory
+}
+
+class PlanningConfig {
+  +center_x_mm: float
+  +center_y_mm: float
+  +draw_z_mm: float
+  +workspace_width_mm: float
+  +workspace_height_mm: float
+  +rotation_deg: float
+  +step_mm: float
+  +use_lift: bool
+  +lift_z_mm: float
+  +drawing_speed_mm_s: float
+  +travel_speed_mm_s: float
+  +tool_orientation_deg: Tuple[float,float,float]
+  +optimize_curve_order: bool
+  +exact_order_limit: int
+  +two_opt_passes: int
+}
+
+class URScriptExecutionProfile {
+  +output_pin: int
+  +output_on_delay_ms: float
+  +output_off_delay_ms: float
+  +blend_radius_mm: float
+  +max_speed_mm_s: float
+  +acceleration_m_s2: float
+  +compile_options(): Dict
+  +export_options(): Dict
+}
+
+CurveList "1" o-- "0..*" Curve2D
+Trajectory "1" o-- "0..*" TrajectoryPoint
+PlanningConfig ..> Trajectory : 生成参数
+CurveList ..> Trajectory : 轨迹规划输入
+URScriptExecutionProfile ..> Trajectory : 仅用于UR5执行/导出\n不写入通用trajectory.json
+
+note right of CurveList
+机器人无关
+坐标系: image_px
+交付物: curves.json
+end note
+
+note right of Trajectory
+机器人无关轨迹
+坐标系: robot_base
+包含TCP姿态与点速度
+不包含URScript专属参数
+end note
+
+@enduml

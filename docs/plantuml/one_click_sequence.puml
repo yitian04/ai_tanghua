@@ -1,0 +1,55 @@
+﻿@startuml
+skinparam shadowing false
+skinparam defaultFontName Microsoft YaHei
+skinparam sequenceMessageAlign center
+
+title 一键绘制端到端时序
+
+actor User as user
+participant "一键绘制页\none_click_page" as page
+participant "图像处理\nimage_process_module" as image
+participant "矢量化后端\nOpenCV/Skeleton/SVG" as vector
+participant "轨迹规划\nTrajectoryPlanner" as planner
+participant "文件导出\njson_exporter" as json
+participant "UR5适配器\nUR5RobotAdapter" as ur5
+participant "URScriptBuilder" as script
+participant "UR5控制器" as robot
+
+database "data/images" as images
+database "data/curves" as curvesdb
+database "data/trajectories" as trajdb
+
+user -> page: 上传图片/输入图片路径
+user -> page: 点击“一键生成预览”或“一键生成并绘制”
+
+page -> images: 保存输入图片(可选)
+page -> image: create_binary_preview(image)
+image --> page: binary_preview + content_analysis
+page -> page: 更新单个流程状态表: 二值化完成
+
+page -> image: vectorize_image_to_curve_list(image, defaults)
+image -> vector: skeleton/outline/mixed tracing
+vector --> image: CurveList
+image --> page: CurveList
+page -> curvesdb: export_curves_json(curves.json)
+page -> page: 曲线预览(Y轴向上递减, 颜色表示顺序)
+
+page -> planner: plan(CurveList, PlanningConfig defaults)
+planner --> page: Trajectory
+page -> trajdb: export_trajectory_json(trajectory.json)
+page -> page: 轨迹XY预览 + 统计信息
+
+alt 仅生成预览
+  page --> user: 显示中间预览和文件路径
+else 确认现场安全并执行
+  page -> ur5: execute_trajectory(Trajectory, execution_profile)
+  ur5 -> ur5: check_motion_ready()
+  ur5 -> script: compile_urscript(Trajectory)
+  script --> ur5: URScript\n首尾 movej 准备姿态\nDO0 控制\nmovel + blend
+  ur5 -> robot: send script via port 30002
+  robot --> ur5: socket accepted / error
+  ur5 --> page: CommandResult
+  page --> user: 执行结果或失败步骤
+end
+
+@enduml

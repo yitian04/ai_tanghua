@@ -1,22 +1,27 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Dict
 
 import streamlit as st
 import yaml
 
-from apps.gui.views import design_page, export_page, one_click_page, planning_page, robot_page, vector_page
-
-
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+from apps.gui.views import direct_curve_page, design_page, export_page, one_click_page, planning_page, robot_page, vector_page
+
+
 CONFIG_PATH = os.path.join(ROOT_DIR, "config", "settings.yaml")
 
 
 WORKFLOW_STATE_KEYS = [
     "job_name",
     "latest_image_path",
+    "design_prompt",
     "latest_curves_path",
     "latest_trajectory_path",
     "one_click_upload",
@@ -24,7 +29,7 @@ WORKFLOW_STATE_KEYS = [
     "connection_test",
     "robot_status",
     "robot_log",
-]
+    ]
 
 
 def load_config() -> Dict:
@@ -187,6 +192,7 @@ def main() -> None:
     pages = {
         "一键绘制": one_click_page.render,
         "设计输入": design_page.render,
+        "AI生成图片": direct_curve_page.render,
         "图像转曲线": vector_page.render,
         "轨迹规划": planning_page.render,
         "数字文件": export_page.render,
@@ -201,7 +207,7 @@ def main() -> None:
             label_visibility="collapsed",
         )
         st.divider()
-        st.caption("前四个模块只生成数字文件；机器人控制页负责加载文件并执行。")
+        st.caption("前几个模块只生成数字文件；机器人控制页负责加载文件并执行。")
         with st.expander("历史数据"):
             if st.button("清除当前会话记录", width="stretch"):
                 clear_workflow_state()
@@ -220,3 +226,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+

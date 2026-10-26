@@ -13,6 +13,8 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from apps.gui.views import direct_curve_page, design_page, export_page, one_click_page, planning_page, robot_page, vector_page
+from apps.gui.accessibility import render_form_accessibility_patch
+from apps.gui.plot_fonts import configure_matplotlib_chinese_font
 
 
 CONFIG_PATH = os.path.join(ROOT_DIR, "config", "settings.yaml")
@@ -21,7 +23,10 @@ CONFIG_PATH = os.path.join(ROOT_DIR, "config", "settings.yaml")
 WORKFLOW_STATE_KEYS = [
     "job_name",
     "latest_image_path",
+    "vector_image_path",
     "design_prompt",
+    "ai_sugar_task_id",
+    "pending_navigation",
     "latest_curves_path",
     "latest_trajectory_path",
     "one_click_upload",
@@ -47,7 +52,7 @@ def clear_workflow_state() -> None:
 
 def clear_generated_files(root_dir: str) -> int:
     deleted = 0
-    for folder in ("images", "curves", "trajectories", "exports", "jobs"):
+    for folder in ("images", "ai_generation", "curves", "trajectories", "exports", "jobs"):
         data_dir = Path(root_dir) / "data" / folder
         if not data_dir.exists():
             continue
@@ -186,13 +191,15 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
     config = load_config()
+    configure_matplotlib_chinese_font()
 
     apply_dense_layout()
+    render_form_accessibility_patch()
     st.markdown('<div class="app-title">糖画机械臂控制系统</div>', unsafe_allow_html=True)
     pages = {
         "一键绘制": one_click_page.render,
         "设计输入": design_page.render,
-        "AI生成图片": direct_curve_page.render,
+        "AI糖画线稿": direct_curve_page.render,
         "图像转曲线": vector_page.render,
         "轨迹规划": planning_page.render,
         "数字文件": export_page.render,
@@ -200,10 +207,14 @@ def main() -> None:
     }
     with st.sidebar:
         st.markdown('<div class="sidebar-title">模块导航</div>', unsafe_allow_html=True)
+        pending_navigation = st.session_state.pop("pending_navigation", None)
+        if pending_navigation in pages:
+            st.session_state["main_navigation"] = pending_navigation
         selected_page = st.radio(
             "选择工作模块",
             list(pages.keys()),
             index=0,
+            key="main_navigation",
             label_visibility="collapsed",
         )
         st.divider()

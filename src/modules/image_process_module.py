@@ -25,12 +25,12 @@ def image_to_curves(
     image: np.ndarray,
     threshold_method: ThresholdMethod = "otsu",
     binary_threshold: int = 128,
-    blur_size: int = 3,
+    blur_size: int = 0,
     adaptive_block_size: int = 31,
     adaptive_c: int = 5,
     min_component_area: int = 20,
-    bridge_gap_px: int = 2,
-    min_curve_length_ratio: float = 0.01,
+    bridge_gap_px: int = 0,
+    min_curve_length_ratio: float = 0.003,
     line_simplify_epsilon: float = 1.2,
     area_simplify_epsilon: float = 2.0,
     min_path_length: int = 8,
@@ -64,12 +64,12 @@ def vectorize_image_to_curve_list(
     image: np.ndarray,
     threshold_method: ThresholdMethod = "otsu",
     binary_threshold: int = 128,
-    blur_size: int = 3,
+    blur_size: int = 0,
     adaptive_block_size: int = 31,
     adaptive_c: int = 5,
     min_component_area: int = 20,
-    bridge_gap_px: int = 2,
-    min_curve_length_ratio: float = 0.01,
+    bridge_gap_px: int = 0,
+    min_curve_length_ratio: float = 0.003,
     line_simplify_epsilon: float = 1.2,
     area_simplify_epsilon: float = 2.0,
     min_path_length: int = 8,
@@ -77,7 +77,7 @@ def vectorize_image_to_curve_list(
     max_vectorize_dim: int = DEFAULT_MAX_PROCESS_DIM,
     stroke_max_width_px: float = 18.0,
     source_image: str | None = None,
-    vectorizer: VectorizerMethod = "opencv_fallback",
+    vectorizer: VectorizerMethod = "skeleton_stroke_svg",
     outline_engine: OutlineEngine = "auto",
     svg_output_path: str | Path | None = None,
     work_dir: str | Path | None = None,
@@ -450,11 +450,11 @@ def create_binary_preview(
     image: np.ndarray,
     threshold_method: ThresholdMethod = "otsu",
     binary_threshold: int = 128,
-    blur_size: int = 3,
+    blur_size: int = 0,
     adaptive_block_size: int = 31,
     adaptive_c: int = 5,
     min_component_area: int = 20,
-    bridge_gap_px: int = 2,
+    bridge_gap_px: int = 0,
     max_preview_dim: int = DEFAULT_MAX_PROCESS_DIM,
     input_mode: TraceInputMode = "auto",
     stroke_max_width_px: float = 18.0,
@@ -532,7 +532,7 @@ def threshold_image(
     return binary
 
 
-def bridge_small_gaps(binary: np.ndarray, bridge_gap_px: int = 2) -> np.ndarray:
+def bridge_small_gaps(binary: np.ndarray, bridge_gap_px: int = 0) -> np.ndarray:
     gap = max(0, int(bridge_gap_px))
     if gap <= 0 or binary.size == 0:
         return binary
@@ -722,8 +722,9 @@ def _line_component_to_curves(
     smooth_iterations: int,
     force_single_path: bool,
 ) -> list[Curve]:
-    closed = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), dtype=np.uint8))
-    skeleton = _thin_binary(closed > 0)
+    # Gap repair is performed once before component extraction. Closing each
+    # component again here can fuse closely spaced hatch lines into one graph.
+    skeleton = _thin_binary(mask > 0)
     branch_count = _skeleton_branch_count(skeleton)
     effective_min_path_length = max(int(min_path_length), int(np.ceil(min_curve_length_px)))
     if _skeleton_is_cycle_like(skeleton):

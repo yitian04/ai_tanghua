@@ -3,13 +3,16 @@ from __future__ import annotations
 import json
 import math
 import os
+import tempfile
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from src.core.models import Curve2D, CurveList
+from src.pipeline.vectorization import parse_svg_to_curve_list
 
 
 class DirectCurveGenerationError(RuntimeError):
@@ -24,9 +27,12 @@ class DirectCurveRequest:
     max_curves: int = 10
     max_points_per_curve: int = 48
     complexity: str = "medium"
-    model: str = "Qwen/Qwen3-8B"
+    model: str = "Qwen/Qwen3.6-27B"
+    fallback_model: str = "moonshotai/Kimi-K2.7-Code"
     api_base_url: str = "https://api.siliconflow.cn/v1"
     timeout_s: int = 180
+    max_attempts: int = 3
+    sample_tolerance_px: float = 2.0
 
 
 class DirectCurveGenerator:
@@ -38,8 +44,68 @@ class DirectCurveGenerator:
             return self.generate_demo(request)
         if not self.api_key:
             raise DirectCurveGenerationError("SILICONFLOW_API_KEY is not set. Use demo mode or input a SiliconFlow API key.")
-        payload = self._call_siliconflow(request)
-        return self._curve_list_from_payload(payload, request, source="siliconflow_json_mode")
+        return self._generate_svg_curves(request)
+
+    def _generate_svg_curves(self, request: DirectCurveRequest) -> CurveList:
+        feedback = ""
+        last_error = ""
+        attempts = max(1, min(4, int(request.max_attempts)))
+        for attempt in range(1, attempts + 1):
+            model = request.fallback_model if attempt == attempts and attempt > 1 else request.model
+            try:
+                payload = self._call_svg_generation(request, model=model, feedback=feedback)
+                svg = _clean_svg(str(payload.get("svg", "")), request)
+                curves = _parse_svg_text(svg, request)
+                deterministic = _deterministic_review(curves, request)
+                if deterministic["accepted"]:
+                    curves.metadata.update(
+                        {
+                            "source": "siliconflow_text_to_svg",
+                            "prompt": request.prompt,
+                            "style": request.style,
+                            "canvas_size": request.canvas_size,
+                            "model": model,
+                            "attempt": attempt,
+                            "description": payload.get("description", ""),
+                            "validation": deterministic,
+                            "generated_svg": svg,
+                        }
+                    )
+                    return curves
+                feedback = _review_feedback(deterministic)
+                last_error = feedback
+            except (DirectCurveGenerationError, ET.ParseError, ValueError) as exc:
+                last_error = str(exc)
+                feedback = f"The previous SVG was invalid: {last_error}. Regenerate it from scratch."
+        raise DirectCurveGenerationError(
+            f"No acceptable sugar-painting SVG after {attempts} attempts: {last_error}"
+        )
+
+    def _call_svg_generation(
+        self, request: DirectCurveRequest, *, model: str, feedback: str
+    ) -> dict[str, Any]:
+        body = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": _svg_system_prompt(request)},
+                {"role": "user", "content": _svg_user_prompt(request, feedback)},
+            ],
+            "response_format": {"type": "json_object"},
+            "max_tokens": 6000,
+            "temperature": 0.1 if feedback else 0.35,
+            "top_p": 0.85,
+        }
+        response_data = self._post_chat_completion(request, body)
+        content = _extract_message_content(response_data)
+        try:
+            payload = _loads_model_json(content)
+        except json.JSONDecodeError as exc:
+            raise DirectCurveGenerationError(
+                f"Model returned invalid JSON: {content[:500]}"
+            ) from exc
+        if not isinstance(payload.get("svg"), str):
+            raise DirectCurveGenerationError("Model JSON did not contain an SVG string.")
+        return payload
 
     def generate_demo(self, request: DirectCurveRequest) -> CurveList:
         prompt = request.prompt.lower()
@@ -180,6 +246,128 @@ def save_curve_list_svg(curves: CurveList, path: str | Path, *, stroke_width: fl
     size = int(curves.metadata.get("canvas_size", 1000))
     output.write_text(curve_list_to_svg(curves, width=size, height=size, stroke_width=stroke_width), encoding="utf-8")
     return output
+
+
+def _svg_system_prompt(request: DirectCurveRequest) -> str:
+    return (
+        "You design simple 2D robot-drawable Chinese sugar-painting line art. "
+        "Return exactly one JSON object with keys description and svg. "
+        "The svg value must be a complete SVG string. Use viewBox 0 0 "
+        f"{request.canvas_size} {request.canvas_size}. "
+        "Use path elements only, fill='none', black strokes, round caps and joins. "
+        f"Use no more than {request.max_curves} paths. "
+        "Prefer cubic Bezier commands. Do not use text, images, CSS, scripts, "
+        "filters, gradients, masks, patterns, clipping, or external references. "
+        "Make one centered recognizable subject with few long smooth strokes. "
+        "Important parts should touch. Avoid tiny details, hatching, double outlines, "
+        "filled regions, self-intersection, and decorative clutter."
+    )
+
+
+def _svg_user_prompt(request: DirectCurveRequest, feedback: str) -> str:
+    prompt = (
+        f"Create sugar-painting curve art for: {request.prompt}. "
+        f"Complexity: {request.complexity}. "
+        "The drawing will be sampled into robot trajectories, so visual recognition "
+        "must come from sparse smooth centerlines."
+    )
+    if feedback:
+        prompt += " Revision feedback: " + feedback
+    return prompt
+
+
+def _extract_svg_text(value: str) -> str:
+    text = (value or "").strip()
+    start = text.find("<svg")
+    end = text.rfind("</svg>")
+    if start < 0 or end < start:
+        raise DirectCurveGenerationError("Model output did not contain a complete SVG.")
+    svg = text[start : end + 6]
+    if len(svg) > 120000:
+        raise DirectCurveGenerationError("Generated SVG is too large.")
+    return svg
+
+
+def _clean_svg(value: str, request: DirectCurveRequest) -> str:
+    root = ET.fromstring(_extract_svg_text(value))
+    if root.tag.rsplit("}", 1)[-1].lower() != "svg":
+        raise DirectCurveGenerationError("Generated XML root is not svg.")
+    allowed = {"svg", "g", "path"}
+    path_count = 0
+    for parent in list(root.iter()):
+        for child in list(parent):
+            tag = child.tag.rsplit("}", 1)[-1].lower()
+            if tag not in allowed:
+                parent.remove(child)
+                continue
+            if tag == "path":
+                path_count += 1
+                if path_count > request.max_curves or not child.attrib.get("d"):
+                    parent.remove(child)
+                    continue
+                child.attrib["fill"] = "none"
+                child.attrib["stroke"] = "black"
+                child.attrib["stroke-linecap"] = "round"
+                child.attrib["stroke-linejoin"] = "round"
+                for key in list(child.attrib):
+                    if key.lower().startswith("on") or key in {"style", "filter", "mask", "clip-path"}:
+                        child.attrib.pop(key, None)
+    root.attrib.clear()
+    root.attrib.update(
+        {
+            "xmlns": "http://www.w3.org/2000/svg",
+            "viewBox": f"0 0 {request.canvas_size} {request.canvas_size}",
+            "width": str(request.canvas_size),
+            "height": str(request.canvas_size),
+        }
+    )
+    output = ET.tostring(root, encoding="unicode")
+    if "<path" not in output and ":path" not in output:
+        raise DirectCurveGenerationError("Generated SVG has no valid path elements.")
+    return output
+
+
+def _parse_svg_text(svg: str, request: DirectCurveRequest) -> CurveList:
+    with tempfile.TemporaryDirectory(prefix="tanghua_svg_") as directory:
+        path = Path(directory) / "generated.svg"
+        path.write_text(svg, encoding="utf-8")
+        curves = parse_svg_to_curve_list(
+            path,
+            sample_tolerance_px=request.sample_tolerance_px,
+            min_curve_length_px=request.canvas_size * 0.015,
+            metadata={"source": "siliconflow_text_to_svg"},
+        )
+    if not curves.curves:
+        raise DirectCurveGenerationError("SVG parser found no drawable curves.")
+    return curves
+
+
+def _deterministic_review(curves: CurveList, request: DirectCurveRequest) -> dict[str, Any]:
+    lengths = [_polyline_length(curve.points) for curve in curves.curves]
+    problems: list[str] = []
+    if len(curves.curves) > request.max_curves:
+        problems.append(f"Too many paths: {len(curves.curves)}")
+    if any(length < request.canvas_size * 0.02 for length in lengths):
+        problems.append("One or more paths are too short.")
+    total = sum(lengths)
+    if total < request.canvas_size * 0.5:
+        problems.append("The drawing is too sparse to be recognizable.")
+    if total > request.canvas_size * request.max_curves * 4:
+        problems.append("The drawing is too dense for sugar painting.")
+    return {
+        "accepted": not problems,
+        "problems": problems,
+        "curve_count": len(curves.curves),
+        "total_curve_length_px": round(total, 2),
+    }
+
+
+def _review_feedback(deterministic: dict[str, Any]) -> str:
+    problems = list(deterministic.get("problems", []))
+    return (
+        "Redraw the same subject as simpler robot-drawable centerlines. "
+        + " ".join(str(item) for item in problems)
+    ).strip()
 
 
 def _extract_message_content(response_data: dict[str, Any]) -> str:

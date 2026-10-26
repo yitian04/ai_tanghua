@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -8,6 +9,7 @@ import streamlit as st
 from PIL import Image
 
 from apps.gui.views.file_naming import build_output_path, infer_prefix_from_path, sanitize_filename
+from apps.gui.plot_fonts import configure_matplotlib_chinese_font
 from src.core.models import CurveList
 from src.modules.image_process_module import create_binary_preview, vectorize_image_to_curve_list
 from src.pipeline.export.json_exporter import export_curves_json, load_curves_json
@@ -15,16 +17,22 @@ from src.pipeline.vectorization import VectorizationToolError, available_vectori
 
 
 METHOD_LABELS = {
-    "Auto mixed strokes/areas": "mixed_stroke_svg",
-    "Line-only skeleton SVG": "skeleton_stroke_svg",
-    "Area-only outline SVG": "outline_svg",
-    "OpenCV fallback": "opencv_fallback",
+    "自动识别线条与面域": "mixed_stroke_svg",
+    "仅提取线条骨架": "skeleton_stroke_svg",
+    "仅提取面域轮廓": "outline_svg",
+    "OpenCV 基础模式": "opencv_fallback",
 }
 
 THRESHOLD_LABELS = {
-    "Otsu auto": "otsu",
-    "Adaptive": "adaptive",
-    "Manual": "manual",
+    "Otsu 自动阈值": "otsu",
+    "自适应阈值": "adaptive",
+    "手动阈值": "manual",
+}
+
+OUTLINE_ENGINE_LABELS = {
+    "自动选择": "auto",
+    "VTracer": "vtracer",
+    "Potrace": "potrace",
 }
 
 
@@ -34,6 +42,7 @@ def _plot_curves(
     show_source_image: bool = True,
     source_alpha: float = 0.35,
 ):
+    configure_matplotlib_chinese_font()
     fig, ax = plt.subplots(figsize=(4.2, 3.4), dpi=110)
     if show_source_image and image_path and Path(image_path).is_file():
         image = Image.open(image_path).convert("RGB")
@@ -52,9 +61,9 @@ def _plot_curves(
         ax.scatter(xs[0], ys[0], s=6, marker="o", color=color)
 
     ax.set_aspect("equal", adjustable="box")
-    ax.set_title("CurveList preview", fontsize=9)
-    ax.set_xlabel("image x / px")
-    ax.set_ylabel("image y / px")
+    ax.set_title("曲线预览", fontsize=9)
+    ax.set_xlabel("图像 X 坐标 / 像素")
+    ax.set_ylabel("图像 Y 坐标 / 像素")
     ax.grid(True, alpha=0.25)
     fig.tight_layout(pad=0.4)
     return fig
@@ -68,9 +77,10 @@ def _render_curve_summary(
 ) -> None:
     total_points = sum(len(curve.points) for curve in curve_list.curves)
     col_a, col_b, col_c = st.columns(3)
-    col_a.metric("Curves", len(curve_list.curves))
-    col_b.metric("Points", total_points)
-    col_c.metric("Frame", curve_list.coordinate_frame)
+    col_a.metric("曲线数", len(curve_list.curves))
+    col_b.metric("点数", total_points)
+    frame_label = "图像像素坐标" if curve_list.coordinate_frame == "image_px" else curve_list.coordinate_frame
+    col_c.metric("坐标系", frame_label)
 
     source_svg = curve_list.metadata.get("stroke_svg_output_path") or curve_list.metadata.get("source_svg") or curve_list.metadata.get("svg_output_path")
     if source_svg:
@@ -78,11 +88,11 @@ def _render_curve_summary(
 
     rows = [
         {
-            "curve_id": curve.curve_id,
-            "point_count": len(curve.points),
-            "start": curve.start(),
-            "end": curve.end(),
-            "closed": curve.closed,
+            "曲线编号": curve.curve_id,
+            "点数": len(curve.points),
+            "起点": curve.start(),
+            "终点": curve.end(),
+            "是否闭合": curve.closed,
         }
         for curve in curve_list.curves
     ]
@@ -101,31 +111,38 @@ def _render_curve_summary(
 
 
 def _render_binary_preview(preview: np.ndarray, analysis: dict) -> None:
-    st.markdown("#### Binary preview")
+    st.markdown("#### 二值化与分类预览")
     st.image(Image.fromarray(preview), width="stretch")
-    st.caption(
-        f"components={analysis['component_count']}; "
-        f"stroke-line={analysis['line_component_count']}; "
-        f"area={analysis['area_component_count']}; "
-        f"p90 width={float(analysis['p90_stroke_width_px']):.1f}px. "
-        "black=line skeleton, gray=area outline."
-    )
+    if analysis.get("input_mode") == "line_only":
+        st.caption(
+            f"连通区域={analysis['component_count']}；全部按线条处理；"
+            f"90%分位线宽={float(analysis['p90_stroke_width_px']):.1f}像素。"
+            "黑色表示将要提取的线条骨架，不进行面域识别。"
+        )
+    else:
+        st.caption(
+            f"连通区域={analysis['component_count']}；"
+            f"线条区域={analysis['line_component_count']}；"
+            f"面域={analysis['area_component_count']}；"
+            f"90%分位线宽={float(analysis['p90_stroke_width_px']):.1f}像素。"
+            "黑色表示线条骨架，灰色表示面域轮廓。"
+        )
     original_size = analysis.get("original_image_size")
     processing_size = analysis.get("processing_image_size")
     if original_size and processing_size:
-        st.caption(f"process size: {original_size[0]}x{original_size[1]} -> {processing_size[0]}x{processing_size[1]}")
+        st.caption(f"处理尺寸：{original_size[0]}×{original_size[1]} → {processing_size[0]}×{processing_size[1]}")
 
     rows = [
         {
-            "type": item["content_type"],
-            "x": item["x"],
-            "y": item["y"],
-            "w": item["width"],
-            "h": item["height"],
-            "area": item["area"],
-            "aspect": round(float(item["bbox_aspect"]), 2),
-            "fill": round(float(item["fill_ratio"]), 2),
-            "p90_width": round(float(item["p90_stroke_width_px"]), 1),
+            "类型": "线条" if item["content_type"] == "line" else "面域",
+            "X": item["x"],
+            "Y": item["y"],
+            "宽": item["width"],
+            "高": item["height"],
+            "面积": item["area"],
+            "长宽比": round(float(item["bbox_aspect"]), 2),
+            "填充率": round(float(item["fill_ratio"]), 2),
+            "90%分位线宽": round(float(item["p90_stroke_width_px"]), 1),
         }
         for item in analysis.get("components", [])
     ]
@@ -186,66 +203,133 @@ def _ensure_binary_preview(
 
 def _method_available(method: str, outline_engine: str, tools: dict[str, str | None]) -> tuple[bool, str]:
     if method in {"opencv_fallback", "skeleton_stroke_svg"}:
-        return True, "No external CLI required for line skeleton extraction."
+        return True, "线条骨架提取无需安装外部工具。"
     if method == "mixed_stroke_svg":
         if tools.get("vtracer") or tools.get("potrace"):
-            return True, "Line strokes use skeleton; area outlines use VTracer/Potrace."
-        return True, "Line strokes work; area outlines will fall back to OpenCV contours."
+            return True, "线条使用骨架提取，面域使用 VTracer/Potrace 提取轮廓。"
+        return True, "线条可正常提取；面域将使用 OpenCV 轮廓作为备用方案。"
     if outline_engine == "vtracer":
-        return bool(tools.get("vtracer")), f"VTracer: {tools.get('vtracer') or 'not found'}"
+        return bool(tools.get("vtracer")), f"VTracer：{tools.get('vtracer') or '未找到'}"
     if outline_engine == "potrace":
-        return bool(tools.get("potrace")), f"Potrace: {tools.get('potrace') or 'not found'}"
+        return bool(tools.get("potrace")), f"Potrace：{tools.get('potrace') or '未找到'}"
     if tools.get("vtracer"):
-        return True, f"auto uses VTracer: {tools['vtracer']}"
+        return True, f"自动使用 VTracer：{tools['vtracer']}"
     if tools.get("potrace"):
-        return True, f"auto uses Potrace: {tools['potrace']}"
-    return False, "VTracer/Potrace not found. Put executable under tools/VTracer/ or tools/Potrace/."
+        return True, f"自动使用 Potrace：{tools['potrace']}"
+    return False, "未找到 VTracer/Potrace。请将可执行文件放入 tools/VTracer/ 或 tools/Potrace/。"
 
 
 def render(config: dict, root_dir: str) -> None:
     del config
-    st.subheader("Image to curves")
-    st.caption("Input image, output CurveList JSON and optional stroke-only SVG. This page does not connect to the robot.")
+    st.subheader("图像转曲线")
+    st.caption("上传或选择图像，生成 CurveList JSON，并可选输出仅含笔画的 SVG。本页面不会连接机械臂。")
 
     generated_this_run = False
     tools = available_vectorization_tools()
     control_col, result_col = st.columns([0.85, 1.65])
 
     with control_col:
-        image_path = st.text_input("Image path", value=st.session_state.get("latest_image_path", ""))
-        show_source_image = st.checkbox("Overlay source image", value=True)
-        source_alpha = st.slider("Source alpha", 0.0, 1.0, 0.35, 0.05, disabled=not show_source_image)
+        st.markdown("#### 图像输入")
+        uploaded_image = st.file_uploader(
+            "上传本地图像",
+            type=["png", "jpg", "jpeg", "webp", "bmp"],
+            help="支持 PNG、JPG、JPEG、WEBP 和 BMP；上传后会自动保存到项目的 data/images/uploads 目录。",
+            key="vector_image_upload",
+        )
+        if "vector_image_path" not in st.session_state:
+            st.session_state["vector_image_path"] = st.session_state.get("latest_image_path", "")
+        if uploaded_image is not None:
+            payload = uploaded_image.getvalue()
+            digest = hashlib.sha256(payload).hexdigest()[:10]
+            original_name = Path(uploaded_image.name)
+            safe_stem = sanitize_filename(original_name.stem, "uploaded_image")
+            extension = original_name.suffix.lower() or ".png"
+            upload_dir = Path(root_dir) / "data" / "images" / "uploads"
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            upload_path = upload_dir / f"{safe_stem}_{digest}{extension}"
+            if not upload_path.exists():
+                upload_path.write_bytes(payload)
+            st.session_state["vector_image_path"] = str(upload_path)
+            st.session_state["latest_image_path"] = str(upload_path)
+            st.caption(f"已载入：{uploaded_image.name}")
 
-        method_label = st.selectbox("Vectorization method", list(METHOD_LABELS.keys()), index=0)
+        image_path = st.text_input(
+            "或输入图像文件路径",
+            key="vector_image_path",
+            help="也可以直接填写本机已有图像的完整路径。",
+        )
+        show_source_image = st.checkbox("在曲线上叠加原图", value=True)
+        source_alpha = st.slider("原图透明度", 0.0, 1.0, 0.35, 0.05, disabled=not show_source_image)
+
+        st.markdown("#### 转换参数")
+        method_label = st.selectbox(
+            "曲线提取方式",
+            list(METHOD_LABELS.keys()),
+            index=1,
+            key="vectorizer_method_label",
+            help="AI 线稿默认全部按线条骨架处理，不再把相邻线条识别为面域。",
+        )
         vectorizer = METHOD_LABELS[method_label]
         input_mode = _preview_mode(vectorizer)
         outline_engine = "auto"
         if vectorizer in {"outline_svg", "mixed_stroke_svg"}:
-            outline_engine = st.selectbox("Outline SVG backend", ["auto", "vtracer", "potrace"], index=0)
+            outline_engine_label = st.selectbox("SVG 轮廓引擎", list(OUTLINE_ENGINE_LABELS.keys()), index=0)
+            outline_engine = OUTLINE_ENGINE_LABELS[outline_engine_label]
 
         available, status_text = _method_available(vectorizer, outline_engine, tools)
         if available:
             st.caption(status_text)
         else:
             st.warning(status_text)
+        if vectorizer == "skeleton_stroke_svg":
+            st.info("当前模式会把全部有效黑色区域视为线条并提取中心骨架，不执行面域轮廓处理。")
 
-        threshold_label = st.selectbox("Binarization", list(THRESHOLD_LABELS.keys()), index=0)
+        threshold_label = st.selectbox("二值化方式", list(THRESHOLD_LABELS.keys()), index=0)
         threshold_method = THRESHOLD_LABELS[threshold_label]
-        threshold = st.slider("Manual threshold", 0, 255, 128, disabled=threshold_method != "manual")
-        blur_size = st.selectbox("Blur kernel", [0, 3, 5, 7], index=1)
-        adaptive_block_size = st.selectbox("Adaptive window", [15, 21, 31, 45, 61], index=2, disabled=threshold_method != "adaptive")
-        adaptive_c = st.slider("Adaptive C", -10, 20, 5, disabled=threshold_method != "adaptive")
-        min_component_area = st.number_input("Min component area", min_value=1, max_value=100000, value=20, step=5)
-        bridge_gap_px = st.slider("Bridge small gaps px", 0, 6, 2)
-        stroke_max_width_px = st.number_input("Max stroke width for skeleton px", min_value=1.0, max_value=200.0, value=18.0, step=1.0, disabled=vectorizer == "outline_svg")
-        sample_tolerance = st.number_input("Curve sampling/simplify px", min_value=0.2, max_value=20.0, value=1.2, step=0.2)
-        min_curve_ratio_pct = st.number_input("Short curve filter %", min_value=0.0, max_value=10.0, value=1.0, step=0.1)
-        max_vectorize_dim = st.number_input("Max processing side", min_value=256, max_value=4096, value=1024, step=128)
+        threshold = st.slider("手动阈值", 0, 255, 128, disabled=threshold_method != "manual")
+        blur_size = st.selectbox(
+            "模糊核大小",
+            [0, 3, 5, 7],
+            index=0,
+            help="AI 线稿默认不模糊，以免相邻排线粘连。",
+        )
+        adaptive_block_size = st.selectbox("自适应窗口大小", [15, 21, 31, 45, 61], index=2, disabled=threshold_method != "adaptive")
+        adaptive_c = st.slider("自适应阈值偏移量 C", -10, 20, 5, disabled=threshold_method != "adaptive")
+        min_component_area = st.number_input("最小连通区域面积", min_value=1, max_value=100000, value=20, step=5)
+        bridge_gap_px = st.slider(
+            "连接小断点（像素）",
+            0,
+            6,
+            0,
+            help="默认关闭，避免把相邻排线横向连接；只有确实存在微小断口时再逐级增加。",
+        )
+        stroke_max_width_px = st.number_input(
+            "自动分类最大线宽（像素）",
+            min_value=1.0,
+            max_value=200.0,
+            value=18.0,
+            step=1.0,
+            disabled=vectorizer in {"outline_svg", "skeleton_stroke_svg"},
+            help="仅在“自动识别线条与面域”模式中使用。",
+        )
+        sample_tolerance = st.number_input("曲线采样与简化容差（像素）", min_value=0.2, max_value=20.0, value=1.2, step=0.2)
+        min_curve_ratio_pct = st.number_input(
+            "短曲线过滤比例（%）",
+            min_value=0.0,
+            max_value=10.0,
+            value=0.3,
+            step=0.1,
+            help="降低默认过滤比例，保留构成规则排线的短线。",
+        )
+        max_vectorize_dim = st.number_input("处理图像最大边长", min_value=256, max_value=4096, value=1024, step=128)
 
-        with st.expander("Skeleton fallback parameters", expanded=vectorizer in {"mixed_stroke_svg", "skeleton_stroke_svg"}):
-            area_epsilon = st.number_input("Area simplify px", min_value=0.1, max_value=30.0, value=2.0, step=0.5)
-            smooth_iterations = st.slider("Line smoothing iterations", 0, 3, 0)
-            min_path_length = st.number_input("Min skeleton path length", min_value=2, max_value=1000, value=8, step=1)
+        with st.expander("骨架提取高级参数", expanded=vectorizer in {"mixed_stroke_svg", "skeleton_stroke_svg"}):
+            if vectorizer in {"mixed_stroke_svg", "outline_svg"}:
+                area_epsilon = st.number_input("面域简化容差（像素）", min_value=0.1, max_value=30.0, value=2.0, step=0.5)
+            else:
+                area_epsilon = 2.0
+            smooth_iterations = st.slider("线条平滑次数", 0, 3, 0)
+            min_path_length = st.number_input("骨架最短路径长度", min_value=2, max_value=1000, value=8, step=1)
 
         binary_signature = (
             image_path,
@@ -275,22 +359,22 @@ def render(config: dict, root_dir: str) -> None:
             input_mode=input_mode,
             stroke_max_width_px=float(stroke_max_width_px),
         )
-        generate_clicked = st.button("Generate curves", type="primary", disabled=not (binary_ready and available), width="stretch")
+        generate_clicked = st.button("生成曲线", type="primary", disabled=not (binary_ready and available), width="stretch")
 
     with result_col:
         if not image_path:
-            st.info("Choose or input an image path to generate binary preview.")
+            st.info("请上传本地图像，或输入已有图像的完整路径。")
         elif binary_ready:
             _render_binary_preview(st.session_state["vector_binary_preview"], st.session_state["vector_binary_analysis"])
 
     if image_path and not Path(image_path).is_file():
-        st.error("Image path does not exist or is not a file")
+        st.error("图像路径不存在，或该路径不是文件。")
         return
 
     if generate_clicked:
         source = Path(image_path)
         if not source.is_file():
-            st.error("Image path does not exist or is not a file")
+            st.error("图像路径不存在，或该路径不是文件。")
             return
 
         image = Image.open(source).convert("RGB")
@@ -298,7 +382,7 @@ def render(config: dict, root_dir: str) -> None:
         st.session_state["job_name"] = prefix
         output = build_output_path(root_dir, "curves", prefix, "curves", "json")
         svg_output = build_output_path(root_dir, "curves", prefix, "strokes", "svg") if vectorizer in {"mixed_stroke_svg", "skeleton_stroke_svg", "outline_svg"} else None
-        progress = st.progress(0, text="Start generating curves")
+        progress = st.progress(0, text="开始生成曲线")
 
         def update_progress(value: float, text: str) -> None:
             progress.progress(int(value * 100), text=text)
@@ -331,17 +415,17 @@ def render(config: dict, root_dir: str) -> None:
             st.error(str(exc))
             return
         except Exception as exc:
-            st.error(f"Curve generation failed: {exc}")
+            st.error(f"曲线生成失败：{exc}")
             return
 
         if not curve_list.curves:
-            st.error("No valid curves generated. Adjust binarization, classification, or filters.")
+            st.error("没有生成有效曲线，请调整二值化、区域分类或过滤参数。")
             return
 
         export_curves_json(curve_list, output)
         st.session_state["latest_curves_path"] = str(output)
         with result_col:
-            st.success(f"Output: {output}")
+            st.success(f"曲线文件已输出：{output}")
             _render_curve_summary(
                 curve_list,
                 image_path=str(source),
@@ -353,7 +437,7 @@ def render(config: dict, root_dir: str) -> None:
     latest = st.session_state.get("latest_curves_path")
     if latest and Path(latest).exists() and not generated_this_run:
         with result_col:
-            st.markdown("#### Latest curves file")
+            st.markdown("#### 最近生成的曲线文件")
             st.code(latest)
             try:
                 curve_list = load_curves_json(latest)
@@ -365,4 +449,4 @@ def render(config: dict, root_dir: str) -> None:
                     source_alpha=source_alpha,
                 )
             except Exception as exc:
-                st.warning(f"Curve file preview failed: {exc}")
+                st.warning(f"曲线文件预览失败：{exc}")

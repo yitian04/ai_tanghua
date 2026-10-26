@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "stages": {
+    "sample": {
+      "source": "bananapro",
+      "provider_id": "bananapro",
+      "model_id": "nano-banana-pro"
+    },
+    "line_art": {
+      "source": "bananapro",
+      "provider_id": "bananapro",
+      "model_id": "gpt-image-2.5"
+    }
+  },
+  "prompts": {
+    "zh": {
+      "sample_positive": "纯白背景上以琥珀金色糖浆拉丝绘制，呈现真正手工糖画的气质：糖线有流动感、温度感和轻微自然的不均匀粗细，像铜勺在石板上快速走线留下的糖丝，而不是电脑描边或矢量图形。\n\n主体完整、居中、轮廓清楚，整体造型具有传统糖画的民间审美与手工曲线韵味。龙身以清晰、流畅、粗细协调的单线糖丝塑造，主轮廓尽量由连续的长曲线一气呵成，转折自然圆润，龙头、龙角、龙须、龙爪、龙尾等关键结构明确可辨，姿态生动有神。\n\n所有糖线相互关联并归入主体结构，形成完整连贯的糖线网络；每一条内部糖线至少有一端自然连接主轮廓或主体主干线。内部纹样保持简洁，只保留能够帮助识别龙形象的线条，例如少量鳞片暗示、眼部轮廓、龙须走向和爪部结构；每条线都有清楚的造型作用，不添加多余装饰线。相邻糖线之间保留稳定、清楚的白色间隔，整体疏密均衡，糖线不粘连、不糊成块。\n\n画面具有传统民间糖画的质朴气质，琥珀金色糖线在纯白背景上呈现温润光泽与轻微糖质厚度感，边缘干净利落，局部可见糖丝收尾的细小自然尖角。构图居中、留白充足，主体占画面主要位置，整体呈现一幅线条清晰、连续、简洁、具有传统民间气质的中国糖画。",
+      "sample_negative": "照片，写实场景，三维雕塑，文字，边框，阴影，渐变，高光，纹理，大面积填充，实心色块，黑色块，糖浆色块，粗带，面状糖片，双边轮廓，重复偏移轮廓，轮廓回声，单线变多线，拥挤线条，过密排线，粘连排线，交叉排线，混乱排线，断裂糖线，孤立糖线，悬空短线，无关装饰",
+      "line_art_positive": "这是中轴线（medial axis）/骨架线提取任务，不是轮廓描边、边缘检测或重新设计任务。\n\n保持参考图的主体、姿态、比例、轮廓和糖线拓扑，使用纯白背景与粗细均匀的纯黑中心线重新表达。\n\n线稿结构：\n- 主轮廓保持为尽可能完整、连续的长线。\n- 一根输入糖线只对应一根输出中心线，严格一对一转换。\n- 将每条琶珀色糖线视为一个有宽度的连续笔画区域，只沿该区域的几何中轴输出一根线。\n- 无论原糖线多粗，都只保留位于糖线正中间的一根均匀单线；忽略左右两侧边界。\n- 输出线不得呈空心管、带状轮廓或成对平行边线。\n- 保持参考图中独立糖线的原有数量和位置关系，不增加装饰线。\n- 所有内部线条归入同一个主体线网，每条内部线至少有一端连接主轮廓或主体主干线。\n- 只有参考图中清楚存在多根彼此独立的糖线时，才按原数量逐根转换；每根仍只输出一根中心线。\n- 曲线连接自然，交点明确，主体从轮廓到内部纹样保持连贯。\n- 细节数量适中，线条分布疏密均衡。\n\n最终结果只表示原糖线的中轴路径：每条糖线一条中心线，不保留糖线宽度，不保留糖线两侧边缘。",
+      "line_art_negative": "灰色背景，彩色背景，灰阶，阴影，渐变，纹理，反光，文字，大面积黑色填充，实心黑块，粗黑带，面状区域，边缘检测，轮廓描边，描画糖线两侧边缘，空心管状线，带状轮廓，成对平行边线，双边轮廓，重复轮廓，新增平行线，单线变多线，密集多排线，轮廓回声，等距复制轮廓，同心重复轮廓，重复偏移线，粘连线条，合并排线，交叉排线，弯折排线，混乱排线，断线，碎线，孤立线，悬空线，闭塞小色块，过密细节"
+    },
+    "en": {
+      "sample_positive": "Present a complete centered subject as amber-gold sugar lines on a pure white background, with a clear silhouette and the flowing handmade character of traditional sugar painting.\n\nSugar-line design:\n- Shape the subject with clear, smooth, coordinated single sugar-strand lines.\n- Build the main contour from long continuous curves with naturally rounded turns.\n- Connect every sugar line into the subject structure so the artwork forms one coherent line network.\n- Connect at least one end of every interior sugar line to the main contour or a structural line.\n- Keep interior detail simple and retain only lines that help identify the subject.\n- Where interior pattern is essential to recognition, use only a few necessary independent structural lines, each with a clear descriptive purpose.\n- Preserve stable white spacing between neighboring sugar lines and keep the overall density balanced.\n\nPresent a clear, continuous, concise Chinese folk sugar painting made from expressive sugar lines.",
+      "sample_negative": "photograph, photorealistic scene, 3D sculpture, text, frame, shadow, gradient, highlight, texture, filled region, solid block, black block, syrup mass, thick ribbon, sugar sheet, double-edge contour, repeated offset contour, contour echo, one line becoming multiple lines, crowded lines, dense hatching, merged hatching, crossing hatching, tangled hatching, broken sugar line, isolated sugar line, floating short stroke, unrelated decoration",
+      "line_art_positive": "This is a medial-axis/skeleton extraction task, not contour tracing, edge detection, or redesign.\n\nPreserve the subject, pose, proportions, silhouette, and sugar-line layout. Re-express them as uniform solid-black centerlines on a pure white background.\n\nLine-art structure:\n- Keep the main contour as complete continuous long lines wherever possible.\n- Convert exactly one input sugar strand into exactly one output centerline.\n- Treat each amber sugar strand as one continuous stroke region with width, and output a line only along that region's geometric medial axis.\n- Regardless of strand thickness, retain only one uniform line exactly through its middle and ignore both side boundaries.\n- The output must never look like a hollow tube, ribbon outline, or paired parallel boundary lines.\n- Preserve the original count and positional relationship of independent sugar strands; add no decorative lines.\n- Integrate every interior line into one coherent subject network, connecting at least one end to the contour or a structural line.\n- Only where the reference clearly contains several genuinely independent sugar strands, convert them one-for-one at the original count; still output only one centerline for each strand.\n- Use natural connections and explicit junctions from the outer contour to interior structure.\n- Keep a balanced, moderately sparse distribution of detail.\n\nThe final result represents only the medial paths of the original sugar strands: one centerline per strand, with neither strand width nor either side edge retained.",
+      "line_art_negative": "gray background, colored background, grayscale tone, shadow, gradient, texture, reflection, text, large black fill, solid black block, thick black band, filled surface, edge detection, contour tracing, tracing both edges of a sugar strand, hollow tube line, ribbon outline, paired parallel boundary lines, double-edge contour, repeated contour, invented parallel line, one strand becoming multiple lines, dense multi-line band, contour echo, equally spaced contour copies, concentric duplicate outlines, repeated offset line, merged strokes, fused hatching, crossing hatching, bent hatching, tangled hatching, broken line, fragment, isolated line, floating line, enclosed small block, excessive detail"
+    }
+  }
+}

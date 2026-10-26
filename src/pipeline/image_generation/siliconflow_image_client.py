@@ -19,7 +19,7 @@ class SiliconFlowImageError(RuntimeError):
 class SiliconFlowImageRequest:
     prompt: str
     model: str = "Qwen/Qwen-Image"
-    size: str = "1024x1024"
+    size: str = "1328x1328"
     negative_prompt: str = "color, grayscale, shadow, texture, background, filled black areas, tiny fragments, complex details"
     steps: int = 20
     seed: int | None = None
@@ -44,15 +44,14 @@ class SiliconFlowImageClient:
         body: dict[str, Any] = {
             "model": request.model,
             "prompt": request.prompt,
-            "size": request.size,
-            "n": 1,
+            "image_size": request.size,
+            "num_inference_steps": int(request.steps),
         }
-        extra_body = {"step": int(request.steps), **request.extra_body}
         if request.negative_prompt:
-            extra_body["negative_prompt"] = request.negative_prompt
+            body["negative_prompt"] = request.negative_prompt
         if request.seed is not None:
-            extra_body["seed"] = int(request.seed)
-        body["extra_body"] = extra_body
+            body["seed"] = int(request.seed)
+        body.update(request.extra_body)
 
         response = self._post_json("/images/generations", body)
         image_bytes = self._extract_image_bytes(response)
@@ -70,6 +69,7 @@ class SiliconFlowImageClient:
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
+                "X-Enable-Watermark": "0",
             },
         )
         try:

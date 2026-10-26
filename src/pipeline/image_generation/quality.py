@@ -22,8 +22,10 @@ class ImageQualityReport:
 def evaluate_traceable_line_image(image_path: str | Path, *, max_dim: int = 768) -> ImageQualityReport:
     image = np.array(Image.open(image_path).convert("RGB"))
     image = _resize_rgb(image, max_dim=max_dim)
-    binary = threshold_image(image, method="otsu", blur_size=3)
-    binary = bridge_small_gaps(binary, bridge_gap_px=1)
+    # Inspect the line art as delivered. Blur/closing can hide broken strokes
+    # and can also fuse a row of nearby hatch lines into a false solid region.
+    binary = threshold_image(image, method="otsu", blur_size=0)
+    binary = bridge_small_gaps(binary, bridge_gap_px=0)
     binary_mask = binary > 0
     total_px = max(1, int(binary_mask.size))
     black_ratio = float(np.count_nonzero(binary_mask) / total_px)
@@ -53,14 +55,16 @@ def evaluate_traceable_line_image(image_path: str | Path, *, max_dim: int = 768)
         penalties.append((35, "线条太少，可能无法识别主体"))
     if black_ratio > 0.16:
         penalties.append((35, "黑色区域过多，图像更像填充图而不是线稿"))
-    if int(analysis.get("component_count", 0)) > 45:
-        penalties.append((25, "连通区域过多，转曲线后容易产生大量碎线"))
+    if int(analysis.get("component_count", 0)) > 20:
+        penalties.append((25, "独立线条过多，存在断线或孤立糖线，转曲线后容易产生碎线"))
     if small_component_count > 50:
         penalties.append((25, "短小噪声过多，后续轨迹会变碎"))
     if large_filled_count > 0:
         penalties.append((30, "存在较大的填充块，不适合中心线提取"))
-    if detail_density > 0.085:
-        penalties.append((20, "边缘密度过高，细节过多"))
+    if detail_density > 0.06:
+        penalties.append((25, "边缘密度过高，可能存在单线变多线或重复偏移轮廓"))
+    elif detail_density > 0.045:
+        penalties.append((15, "边缘密度偏高，请检查是否出现重复轮廓"))
     if p90_stroke > 42:
         penalties.append((15, "笔画过粗，可能被识别为面图"))
 

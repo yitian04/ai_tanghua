@@ -9,7 +9,9 @@ from PIL import Image, ImageDraw
 from src.pipeline.image_generation.providers import ImageCallResult, ImageRequestOptions
 from src.pipeline.image_generation.quality import evaluate_traceable_line_image
 from src.pipeline.image_generation.sugar_painting import (
+    SAMPLE_PROMPT_TEMPLATES,
     SugarPaintingService,
+    _prompt_body,
     compose_stage_prompt,
     negative_prompt_for,
     subject_instruction_for,
@@ -72,6 +74,14 @@ class CapturingSiliconFlowProvider(FakeImageProvider):
 
 
 class SugarPaintingServiceTests(unittest.TestCase):
+    def test_chinese_sample_default_is_subject_agnostic(self) -> None:
+        body = _prompt_body(SAMPLE_PROMPT_TEMPLATES["zh"])
+        self.assertIn("关键识别结构", body)
+        self.assertIn("真实手工浇注", body)
+        self.assertNotIn("{{OBJECT}}", body)
+        for dragon_specific_word in ("龙身", "龙头", "龙角", "龙须", "龙爪", "龙尾", "鳞片"):
+            self.assertNotIn(dragon_specific_word, body)
+
     def test_empty_negative_prompt_is_preserved_and_not_sent(self) -> None:
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as temporary:
             service = SugarPaintingService(temporary)

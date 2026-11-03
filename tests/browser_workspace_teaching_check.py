@@ -1,0 +1,48 @@
+"""Use the substitute-only robot fixture; no real robot is addressed."""
+from playwright.sync_api import sync_playwright,expect
+
+with sync_playwright() as p:
+    browser=p.chromium.launch(executable_path='C:/Program Files/Google/Chrome/Application/chrome.exe',headless=True)
+    page=browser.new_page(viewport={'width':1400,'height':1000});page.goto('http://127.0.0.1:8533')
+    expect(page.get_by_text('工作区示教',exact=True)).to_be_visible(timeout=20000)
+    page.get_by_role('button',name='模拟离线',exact=True).click()
+    page.get_by_role('button',name='停止并关料',exact=True).click()
+    expect(page.get_by_text('任务状态：未运行',exact=True)).to_be_visible()
+    expect(page.get_by_text('未连接，停止请求未确认。',exact=True)).to_be_visible()
+    page.get_by_role('button',name='清除停止提示',exact=True).click()
+    expect(page.get_by_text('未连接，停止请求未确认。',exact=True)).to_have_count(0)
+    page.get_by_role('button',name='模拟在线',exact=True).click()
+    page.get_by_role('button',name='ⓘ 操作说明',exact=True).first.click()
+    dialog=page.get_by_role('dialog');expect(dialog).to_be_visible()
+    expect(dialog.get_by_text('按这个顺序操作',exact=True)).to_be_visible()
+    dialog.get_by_role('button',name='Close',exact=True).click()
+    mapping=[('准备姿态',0),('落笔姿态',1),('左上角',2),('右上角',3),('左下角',4),('右下角',5)]
+    for label,index in mapping:
+        page.get_by_role('combobox',name='替身读取位置').click()
+        page.get_by_role('option',name=label,exact=True).click()
+        page.get_by_role('button',name='读取当前位置',exact=True).nth(index).click()
+        expect(page.get_by_role('button',name='正式绘制',exact=True)).to_be_disabled()
+    lift=page.get_by_role('spinbutton',name='4 · 抬起高度 mm（相对绘制台面）',exact=True)
+    lift.fill('15');lift.press('Enter')
+    page.get_by_role('button',name='保存工作区配置',exact=True).click()
+    expect(page.get_by_text('本配置尚未试运行并确认验证。',exact=False)).to_be_visible()
+    page.get_by_role('button',name='保存至轨迹规划默认设置',exact=True).click()
+    expect(page.get_by_text('已更新规划默认值与最近值；现有轨迹和速度未改变。',exact=True)).to_be_visible()
+    page.get_by_role('button',name='ⓘ 操作说明',exact=True).nth(1).click()
+    expect(page.get_by_role('dialog')).to_contain_text('10%')
+    page.get_by_role('dialog').get_by_role('button',name='Close',exact=True).click()
+    page.get_by_role('button',name='模拟正常完成',exact=True).click()
+    confirmation='我已核对轨迹、工作区示教、TCP、接线与现场条件，允许本次任务'
+    page.get_by_text(confirmation,exact=True).click()
+    page.get_by_role('button',name='关料试运行',exact=True).click()
+    expect(page.get_by_text('任务状态：已完成',exact=True)).to_be_visible(timeout=15000)
+    page.get_by_text('已观察完整关料试运行，确认接近、整个绘制区上方、抬离与返回均无障碍',exact=True).click()
+    page.get_by_role('button',name='确认本配置已验证',exact=True).click()
+    page.get_by_text(confirmation,exact=True).click()
+    expect(page.get_by_role('button',name='正式绘制',exact=True)).to_be_enabled()
+    page.set_viewport_size({'width':620,'height':900})
+    stop=page.get_by_role('button',name='停止并关料',exact=True)
+    expect(stop).to_be_visible();box=stop.bounding_box();assert box['x']>=0 and box['x']+box['width']<=620
+    assert not page.get_by_test_id('stException').count()
+    browser.close()
+    print('PASS: offline stop, help dialogs, six teaching points, save defaults, trial approval, formal button, narrow layout')

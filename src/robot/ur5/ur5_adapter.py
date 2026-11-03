@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+import re
 import struct
 import subprocess
 import time
@@ -60,20 +61,15 @@ class UR5RobotAdapter(RobotAdapter):
         ok = self.stop_program()
         return CommandResult(ok=ok, message=self.last_dashboard_response or ("stopped" if ok else "stop failed"))
 
-    def execute_trajectory(self, trajectory: Trajectory, output_pin: int = 0, **compile_options) -> CommandResult:
-        errors = validate_trajectory(trajectory)
-        if errors:
-            return CommandResult(ok=False, message="; ".join(errors))
-
-        ready = self.check_motion_ready()
-        if not ready.get("ok"):
-            return CommandResult(ok=False, message=ready.get("message", "robot not ready"), data=ready)
-
-        script = compile_urscript(trajectory, output_pin=output_pin, **compile_options)
-        if not self._send_script(script):
-            self.set_discharge(False, output_pin=output_pin)
-            return CommandResult(ok=False, message=f"URScript 发送失败：{self.last_error or self.last_dashboard_response}")
-        return CommandResult(ok=True, message=f"URScript 已发送，轨迹点 {len(trajectory.points)} 个", data={"script": script})
+    def execute_trajectory(self, trajectory: Trajectory, output_pin: int = 0, **options) -> CommandResult:
+        service=options.pop('task_service',None)
+        config=options.pop('path_config',None);owner=options.pop('owner',None)
+        if service is None or config is None or not owner:
+            return CommandResult(ok=False,message='请通过任务服务和已验证路径提交；直接发送运动已禁用。')
+        try:
+            snapshot=service.submit(self,trajectory,config,options,owner)
+            return CommandResult(ok=True,message='任务已受理，尚未确认启动或完成',data=snapshot)
+        except (ValueError,RuntimeError) as exc:return CommandResult(ok=False,message=str(exc))
 
     def ping_host(self, timeout_ms: int = 500) -> Dict:
         if not self.ip_address:
@@ -115,7 +111,7 @@ class UR5RobotAdapter(RobotAdapter):
                 greeting = self._read_line(sock)
                 sock.sendall(b"robotmode\n")
                 robotmode = self._read_line(sock)
-            dashboard_ok = "robotmode" in robotmode.lower()
+            dashboard_ok = bool(re.fullmatch(r"Robotmode: (?:NO_CONTROLLER|DISCONNECTED|CONFIRM_SAFETY|BOOTING|POWER_OFF|POWER_ON|IDLE|BACKDRIVE|RUNNING)",robotmode,re.I))
             self.last_dashboard_response = robotmode or greeting
             self.last_error = "" if dashboard_ok else f"unexpected dashboard response: {robotmode or greeting or 'empty'}"
             return {
@@ -142,25 +138,29 @@ class UR5RobotAdapter(RobotAdapter):
 
     def power_on(self) -> bool:
         response = self._send_dashboard_command("power on")
-        return self._response_ok(response, ("powering on", "power on", "ok"))
+        return self._response_ok(response, ("powering on",))
 
     def power_off(self) -> bool:
         response = self._send_dashboard_command("power off")
-        return self._response_ok(response, ("powering off", "power off", "ok"))
+        return self._response_ok(response, ("powering off",))
 
     def brake_release(self) -> bool:
         response = self._send_dashboard_command("brake release")
-        return self._response_ok(response, ("brake releasing", "brake released", "brake", "ok"))
+        return self._response_ok(response, ("brake releasing", "brake released"))
 
     def stop_program(self) -> bool:
         response = self._send_dashboard_command("stop")
-        return self._response_ok(response, ("stopped", "stopping", "ok"))
+        return self._response_ok(response, ("stopped",))
 
-    def set_speed_fraction(self, fraction: float = 0.1) -> Dict:
-        fraction = max(0.01, min(float(fraction), 1.0))
-        response = self._send_dashboard_command(f"set speed {fraction:.3f}")
-        ok = self._response_ok(response, ("setting speed", "speed", "ok"))
-        return {"ok": ok, "response": response}
+    def set_speed_fraction(self, fraction: float = 0.1, *, channel=None) -> Dict:
+        if channel is None:return {'ok':False,'response':'倍率必须通过已建立的 RTDE 控制通道设置并读回。'}
+        try:
+            channel.send(speed=fraction)
+            for _ in range(125):
+                sample=channel.receive()
+                if abs(sample['target_speed_fraction']-fraction)<.005:return {'ok':True,'response':'RTDE 倍率已读回确认'}
+            return {'ok':False,'response':'倍率未得到反馈确认'}
+        except Exception as exc:return {'ok':False,'response':str(exc)}
 
     def get_robot_mode(self) -> str:
         return self._send_dashboard_command("robotmode") or "unknown"
@@ -173,7 +173,7 @@ class UR5RobotAdapter(RobotAdapter):
 
     def get_safety_status(self) -> str:
         response = self._send_dashboard_command("safetystatus")
-        if not response:
+        if not response or response.lower().startswith(("unknown","failed","error","command is not")):
             response = self._send_dashboard_command("safetymode")
         return response or "unknown"
 
@@ -220,11 +220,11 @@ class UR5RobotAdapter(RobotAdapter):
         safety_status = str(info.get("safety_status", "")).lower()
         program_state = str(info.get("program_state", "")).lower()
 
-        if "running" not in robot_mode:
+        if robot_mode not in {"running","robotmode: running"}:
             return {"ok": False, "message": f"机器人未处于可运动模式：{info.get('robot_mode')}", "info": info}
-        if "normal" not in safety_status:
+        if safety_status not in {"normal","safetystatus: normal","safetymode: normal"}:
             return {"ok": False, "message": f"安全状态不允许运动：{info.get('safety_status')}", "info": info}
-        if "playing" in program_state:
+        if program_state.split(" ",1)[0] != "stopped":
             return {"ok": False, "message": f"已有程序正在运行：{info.get('program_state')}", "info": info}
 
         realtime = self.get_realtime_state()
@@ -233,67 +233,8 @@ class UR5RobotAdapter(RobotAdapter):
 
         return {"ok": True, "message": "机器人状态允许运动", "info": info, "realtime": realtime}
 
-    def movej_degrees(
-        self,
-        target_degrees: List[float],
-        speed_fraction: float = 0.1,
-        velocity: float = 0.105,
-        acceleration: float = 0.12,
-        timeout_s: float = 120.0,
-        tolerance_deg: float = 1.0,
-    ) -> Dict:
-        if len(target_degrees) != 6:
-            return {"ok": False, "message": "目标关节角必须是 6 个值"}
-
-        ready = self.check_motion_ready()
-        if not ready.get("ok"):
-            return ready
-
-        speed_result = self.set_speed_fraction(speed_fraction)
-        target_radians = [self._deg_to_rad(value) for value in target_degrees]
-        target_literal = "[" + ", ".join(f"{value:.6f}" for value in target_radians) + "]"
-        script = (
-            "def slow_joint_move():\n"
-            f"  movej({target_literal}, a={acceleration:.4f}, v={velocity:.4f})\n"
-            "end\n"
-            "slow_joint_move()"
-        )
-
-        if not self._send_script(script):
-            return {"ok": False, "message": f"运动脚本发送失败：{self.last_error or self.last_dashboard_response}"}
-
-        start = time.time()
-        last_realtime = None
-        while time.time() - start < timeout_s:
-            time.sleep(0.5)
-            realtime = self.get_realtime_state()
-            if realtime.get("ok"):
-                last_realtime = realtime
-                joints = realtime.get("joint_degrees", [])
-                if len(joints) == 6:
-                    max_error = max(abs(current - target) for current, target in zip(joints, target_degrees))
-                    if max_error <= tolerance_deg:
-                        return {
-                            "ok": True,
-                            "message": f"已到达目标关节姿态，最大关节误差 {max_error:.2f}°",
-                            "speed_response": speed_result.get("response", ""),
-                            "realtime": realtime,
-                        }
-
-            program_state = self.get_program_state().lower()
-            if "stopped" in program_state and last_realtime:
-                joints = last_realtime.get("joint_degrees", [])
-                if len(joints) == 6:
-                    max_error = max(abs(current - target) for current, target in zip(joints, target_degrees))
-                    if max_error <= tolerance_deg * 2:
-                        return {
-                            "ok": True,
-                            "message": f"程序停止，关节已接近目标关节姿态，最大误差 {max_error:.2f}°",
-                            "speed_response": speed_result.get("response", ""),
-                            "realtime": last_realtime,
-                        }
-
-        return {"ok": False, "message": "等待关节运动完成超时，请检查机器人状态", "realtime": last_realtime}
+    def movej_degrees(self, target_degrees, **options) -> Dict:
+        return {'ok':False,'message':'任意关节回位已禁用，请通过任务服务运行已配置的准备路径。'}
 
     def get_realtime_state(self) -> Dict:
         if not self.ip_address:
@@ -304,6 +245,7 @@ class UR5RobotAdapter(RobotAdapter):
                 sock.settimeout(self.timeout)
                 header = self._recv_exact(sock, 4)
                 packet_size = struct.unpack(">i", header)[0]
+                if not 540 <= packet_size <= 4096: raise OSError("invalid realtime packet size")
                 payload = self._recv_exact(sock, packet_size - 4)
         except OSError as exc:
             return {"ok": False, "error": str(exc)}
@@ -338,13 +280,17 @@ class UR5RobotAdapter(RobotAdapter):
     def set_tool_output(self, pin: int, value: int) -> bool:
         if not 0 <= int(pin) <= 7:
             return False
-        return self._send_script(f"set_digital_out({int(pin)}, {bool(value)})")
+        if value:
+            self.last_error="手动出料已禁用；请通过受监控任务执行。"
+            return False
+        return self._send_script(f"sec close_output():\n  set_standard_digital_out({int(pin)}, False)\nend")
 
     def set_discharge(self, enabled: bool, output_pin: int = 0) -> bool:
         return self.set_tool_output(output_pin, 1 if enabled else 0)
 
     def execute_script(self, script: str) -> bool:
-        return bool(script.strip()) and self._send_script(script)
+        self.last_error="未监控脚本直接执行已禁用，请通过任务服务提交。"
+        return False
 
     def compile_urscript(self, points: List[Dict] | List[TrajectoryPoint] | Trajectory, output_pin: int = 0, **options) -> str:
         return compile_urscript(self._coerce_trajectory(points), output_pin=output_pin, **options)
@@ -386,7 +332,6 @@ class UR5RobotAdapter(RobotAdapter):
                 sock.settimeout(self.timeout)
                 self._read_line(sock)
                 sock.sendall((command.strip() + "\n").encode("utf-8"))
-                time.sleep(0.1)
                 response = self._read_line(sock)
             self.last_error = ""
             self.last_dashboard_response = response
@@ -398,9 +343,9 @@ class UR5RobotAdapter(RobotAdapter):
 
     def _read_line(self, sock: socket.socket) -> str:
         chunks = []
-        while True:
+        while len(chunks) < 8192:
             try:
-                data = sock.recv(4096)
+                data = sock.recv(1)
                 if not data:
                     break
                 chunks.append(data)
@@ -408,7 +353,9 @@ class UR5RobotAdapter(RobotAdapter):
                     break
             except socket.timeout:
                 break
-        return b"".join(chunks).decode("utf-8", errors="ignore").strip()
+        raw=b"".join(chunks)
+        if not raw.endswith(b"\n"): return ""
+        return raw.decode("ascii", errors="replace").strip()
 
     def _recv_exact(self, sock: socket.socket, size: int) -> bytes:
         chunks = []
@@ -456,7 +403,7 @@ class UR5RobotAdapter(RobotAdapter):
         if not response:
             return False
         lowered = response.lower()
-        return any(marker in lowered for marker in ok_markers)
+        return lowered.strip() in ok_markers
 
 
 RobotController = UR5RobotAdapter

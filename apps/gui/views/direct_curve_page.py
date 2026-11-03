@@ -5,7 +5,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-import streamlit as st
+from apps.gui.parameter_ui import ui as st
+from apps.gui.asset_library import file_input, image_input
 
 from src.pipeline.image_generation import (
     BananaProCredentialStore,
@@ -311,10 +312,7 @@ def _render_model_settings(
                     f"{item.get('objectName', '未命名')} · {item.get('taskId', '')}": str(item.get("sampleImage") or "")
                     for item in approved_samples
                 }
-                selected_sample = st.selectbox(
-                    "参考样本", list(sample_labels.keys()), key="stage1_reference_sample"
-                )
-                reference_image = sample_labels[selected_sample]
+                reference_image = file_input(root_dir, "approved_reference", "参考已批准样本", {"image"}, allowed=list(sample_labels.values()))
                 if not supports_reference:
                     st.warning("所选模型不支持参考图输入，请关闭参考样本或更换模型。")
             elif not approved_samples:
@@ -1078,7 +1076,7 @@ def _render_task_controls(
         task = service.set_prompt_language(task, prompt_language)
     object_name = st.text_input(
         "主体名称",
-        value=task.object_name if task else "马",
+        value=task.object_name if task else "",
         placeholder="例如：马、兔子、龙",
         help="第一轮建议只输入一个主体，不添加文字或复杂背景。",
     )
@@ -1122,7 +1120,7 @@ def _render_sample_controls(
         button_label,
         type="primary",
         width="stretch",
-        disabled=not model_ready or not reference_supported,
+        disabled=not model_ready or not reference_supported or (st.session_state.get('stage1_use_reference', False) and not reference_image),
     ):
         if image_provider is None:
             st.error("模型配置不完整。")
@@ -1196,7 +1194,7 @@ def _render_prompt_editor(
             key=f"subject_instruction_{stage}_{task.task_id}_{task.prompt_language}",
         )
         st.caption("发送时，系统会把上面的固定主体指令作为第一行，与下面的提示词正文合并后一起提交给模型。")
-        with st.form(f"prompt_editor_{stage}_{task.task_id}_{task.prompt_language}"):
+        with st.container():
             edited_positive = st.text_area(
                 "提示词正文（可修改并保存为默认）",
                 value=positive,
@@ -1217,16 +1215,12 @@ def _render_prompt_editor(
                 st.caption("当前适配器不支持独立反向提示词，此内容不会发送；可以保持为空。")
             apply_col, default_col = st.columns(2)
             with apply_col:
-                apply_current = st.form_submit_button(
+                apply_current = st.button(
                     "应用到当前任务",
                     width="stretch",
                 )
             with default_col:
-                save_default = st.form_submit_button(
-                    "应用并保存为项目默认",
-                    width="stretch",
-                    type="primary",
-                )
+                save_default = False
         if apply_current or save_default:
             try:
                 service.set_stage_prompts(
@@ -1282,32 +1276,28 @@ def _render_stage_two_task_input(
             st.session_state.pop("ai_sugar_task_id", None)
             st.rerun()
 
-    uploaded_sample = st.file_uploader(
-        "上传糖画参考图",
-        type=["png", "jpg", "jpeg", "webp", "bmp"],
-        key=f"stage2_sample_upload_{task.task_id if task else 'new'}",
-        help="这是第二阶段测试入口；上传后直接作为单中心线提取的输入。",
-    )
-    public_url = st.text_input(
-        "已有公开图片 URL（可选）",
-        value="",
-        key=f"stage2_public_url_{task.task_id if task else 'new'}",
-        placeholder="https://...",
-        help="若留空，使用 Seedream 5 Pro 时会通过已配置图床自动生成 URL。",
-    )
-    if task is not None and task.sample_image and public_url.strip():
-        if st.button(
-            "将此 URL 绑定到当前参考图",
-            width="stretch",
-            key=f"stage2_bind_url_{task.task_id}",
-        ):
-            try:
-                service.set_sample_public_url(task, public_url)
-            except Exception as exc:
-                st.error(str(exc))
-            else:
-                st.success("公开 URL 已保存。")
-                st.rerun()
+    uploaded_sample = image_input(service.root_dir, f"stage2_sample_{task.task_id if task else 'new'}", "糖画参考图")
+    with st.expander("参考图高级设置：已有公开 URL"):
+        public_url = st.text_input(
+            "已有公开图片 URL（可选）",
+            value="",
+            key=f"stage2_public_url_{task.task_id if task else 'new'}",
+            placeholder="https://...",
+            help="若留空，使用 Seedream 5 Pro 时会通过已配置图床自动生成 URL。",
+        )
+        if task is not None and task.sample_image and public_url.strip():
+            if st.button(
+                "将此 URL 绑定到当前参考图",
+                width="stretch",
+                key=f"stage2_bind_url_{task.task_id}",
+            ):
+                try:
+                    service.set_sample_public_url(task, public_url)
+                except Exception as exc:
+                    st.error(str(exc))
+                else:
+                    st.success("公开 URL 已保存。")
+                    st.rerun()
     if st.button(
         "载入参考图并进入第二阶段",
         type="primary",
@@ -1378,11 +1368,7 @@ def _render_line_art_controls(
 
     with st.expander("测试入口：上传黑白线稿", expanded=False):
         st.caption("跳过 AI 线稿提取，直接上传本地线稿进行质量检查和转曲线测试。")
-        uploaded_line_art = st.file_uploader(
-            "选择黑白线稿",
-            type=["png", "jpg", "jpeg", "webp", "bmp"],
-            key=f"ai_line_art_upload_{task.task_id}",
-        )
+        uploaded_line_art = image_input(service.root_dir, f"line_art_{task.task_id}", "黑白线稿")
         if st.button(
             "使用上传图片作为线稿",
             width="stretch",
@@ -1675,10 +1661,7 @@ def _render_quality(report: dict) -> None:
 def _load_current_task(service: SugarPaintingService) -> SugarPaintingTask | None:
     task_id = st.session_state.get("ai_sugar_task_id", "")
     if not task_id:
-        task = service.load_active_task()
-        if task is not None:
-            st.session_state["ai_sugar_task_id"] = task.task_id
-        return task
+        return None
     try:
         return service.load(task_id)
     except Exception:

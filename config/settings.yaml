@@ -10,7 +10,7 @@ ui:
   title: 糖画机械臂控制系统
   refresh_interval: 2000
 planning:
-  curves_path: D:\ai\tanghua_project\data\curves\star_20260706_185605_curves.json
+  curves_path: ''
   center_x_mm: -126.0
   center_y_mm: -587.0
   draw_z_mm: 250.0
@@ -32,5 +32,5 @@ execution:
   output_on_delay_ms: 0.0
   output_off_delay_ms: 0.0
   blend_radius_mm: 5.0
-  max_speed_mm_s: 500.0
+  max_speed_mm_s: 50.0
   acceleration_m_s2: 0.5

@@ -1,6 +1,8 @@
-streamlit>=1.36.0
+streamlit>=1.58.0
 numpy>=1.26.0
 matplotlib>=3.7.0
 opencv-python-headless>=4.8.0
 scipy>=1.11.0
 pyyaml>=6.0
+Hershey-Fonts==2.1.0
+UrRtde @ git+https://github.com/UniversalRobots/RTDE_Python_Client_Library.git@29f02eb0d5164b03a0a95dfd4f4f8645be12aa59

@@ -6,7 +6,8 @@ import yaml
 
 import matplotlib.pyplot as plt
 import numpy as np
-import streamlit as st
+from apps.gui.parameter_ui import ui as st
+from apps.gui.asset_library import file_input, image_input
 from matplotlib.collections import LineCollection
 
 from apps.gui.views.file_naming import build_output_path, infer_prefix_from_path, sanitize_filename
@@ -147,11 +148,14 @@ def _render_trajectory_summary(trajectory: Trajectory) -> None:
 
     preview_mode = st.radio(
         "预览内容",
-        ["XY 预览", "3D 预览", "ControlPointList", "字段说明"],
+        ["执行模拟", "XY 预览", "3D 预览", "ControlPointList", "字段说明"],
         horizontal=True,
         label_visibility="collapsed",
     )
-    if preview_mode == "XY 预览":
+    if preview_mode == "执行模拟":
+        from apps.gui.trajectory_player import render_trajectory_player
+        render_trajectory_player(trajectory,'planning_result')
+    elif preview_mode == "XY 预览":
         fig = _plot_trajectory_xy(trajectory)
         st.pyplot(fig, width="content")
         plt.close(fig)
@@ -198,7 +202,7 @@ def render(config: dict, root_dir: str) -> None:
     control_col, result_col = st.columns([0.9, 1.6])
     with control_col:
         curves_default = st.session_state.get("latest_curves_path") or defaults["curves_path"]
-        curves_path = st.text_input("曲线文件路径", value=curves_default, key="planning_curves_path")
+        curves_path = file_input(root_dir, "planning", "曲线输入", {"curve"}, candidate=curves_default)
 
         col_a, col_b, col_c = st.columns(3)
         center_x = col_a.number_input("桌面中心 X mm", value=float(defaults["center_x_mm"]), key="planning_center_x_mm")
@@ -229,7 +233,6 @@ def render(config: dict, root_dir: str) -> None:
         two_opt_passes = opt_col_b.number_input("2-opt 轮数", value=int(defaults["two_opt_passes"]), min_value=0, max_value=200, step=5, disabled=not optimize_order, key="planning_two_opt_passes")
 
         current_defaults = {
-            "curves_path": curves_path,
             "center_x_mm": float(center_x),
             "center_y_mm": float(center_y),
             "draw_z_mm": float(draw_z),
@@ -257,7 +260,7 @@ def render(config: dict, root_dir: str) -> None:
 
     with result_col:
         if not curves_path:
-            st.info("选择或输入 curves.json 后生成轨迹预览。")
+            st.info("上传或从素材库选择曲线 JSON，预览确认后生成轨迹。")
 
     if generate_clicked:
         source = Path(curves_path)

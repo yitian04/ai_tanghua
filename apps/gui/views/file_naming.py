@@ -15,11 +15,15 @@ def sanitize_filename(value: str, fallback: str = "job") -> str:
 
 
 def build_output_path(root_dir: str, folder: str, prefix: str, suffix: str, extension: str) -> Path:
-    output_dir = Path(root_dir) / "data" / folder
-    output_dir.mkdir(parents=True, exist_ok=True)
     clean_prefix = sanitize_filename(prefix)
     stamp = time.strftime("%Y%m%d_%H%M%S")
-    return output_dir / f"{clean_prefix}_{stamp}_{suffix}.{extension.lstrip('.')}"
+    name=f"{clean_prefix}_{stamp}_{suffix}.{extension.lstrip('.')}"
+    from apps.gui.workspace import output_path
+    temporary=output_path(root_dir,folder,name)
+    if temporary:return temporary
+    output_dir = Path(root_dir) / "data" / folder
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir/name
 
 
 def infer_prefix_from_path(path: str, fallback: str = "job") -> str:

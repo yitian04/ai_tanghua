@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import math
 from typing import Iterable, List, Sequence
@@ -12,18 +12,30 @@ def compile_urscript(
     trajectory: Trajectory,
     output_pin: int = 0,
     acceleration: float = 0.05,
-    min_speed_m_s: float = 0.005,
+    min_speed_m_s: float = 0.0,
     max_speed_m_s: float = 0.5,
     program_name: str = "tanghua_job",
     output_on_delay_s: float = 0.0,
     output_off_delay_s: float = 0.0,
     blend_radius_m: float = 0.001,
-    include_prepare_pose: bool = True,
+    include_prepare_pose: bool = False,
     prepare_joint_degrees: Sequence[float] = PREPARE_JOINT_DEGREES,
     prepare_acceleration: float = 0.12,
     prepare_velocity: float = 0.105,
 ) -> str:
+    if not math.isfinite(max_speed_m_s) or max_speed_m_s <= 0:
+        raise ValueError("执行速度上限必须为有限正数。")
+    from src.core.validation import validate_trajectory
+    errors=validate_trajectory(trajectory)
+    if errors: raise ValueError("; ".join(errors))
+    if include_prepare_pose: raise ValueError("固定准备姿态自动进入已禁用，请使用已验证路径。")
+    if type(output_pin) is not int or not 0<=output_pin<=7: raise ValueError("DO 端口必须为 0–7。")
+    if any(not math.isfinite(x) or x<0 for x in (output_on_delay_s,output_off_delay_s,blend_radius_m)) or not math.isfinite(acceleration) or acceleration<=0: raise ValueError("执行参数无效。")
+    import re
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*",program_name): raise ValueError("程序名称无效。")
     points = list(trajectory.points)
+    if any(not math.isfinite(p.speed_mm_s) or p.speed_mm_s <= 0 for p in points):
+        raise ValueError("轨迹速度必须为有限正数。")
     lines = [f"def {program_name}():", f"  set_digital_out({int(output_pin)}, False)"]
     if include_prepare_pose:
         lines.append(f"  movej({_joint_literal(prepare_joint_degrees)}, a={prepare_acceleration:.4f}, v={prepare_velocity:.4f})")
@@ -34,9 +46,9 @@ def compile_urscript(
             _append_digital_out(lines, int(output_pin), bool(point.drawing), output_on_delay_s, output_off_delay_s)
             drawing_state = point.drawing
         pose = _pose_literal(point)
-        speed = max(min_speed_m_s, min(point.speed_mm_s / 1000.0, max_speed_m_s))
+        speed = min(point.speed_mm_s / 1000.0, max_speed_m_s)
         blend = _blend_radius_for_point(points, idx, blend_radius_m)
-        lines.append(f"  movel({pose}, a={acceleration:.4f}, v={speed:.4f}, r={blend:.4f})")
+        lines.append(f"  movel({pose}, a={acceleration:.4f}, v={speed:.9f}, r={blend:.4f})")
 
     if drawing_state:
         _append_digital_out(lines, int(output_pin), False, output_on_delay_s, output_off_delay_s)

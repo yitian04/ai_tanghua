@@ -213,7 +213,7 @@ def _run_pipeline(
         vectorizer=str(VECTOR_DEFAULTS["vectorizer"]),
         outline_engine=str(VECTOR_DEFAULTS["outline_engine"]),
         svg_output_path=svg_output,
-        work_dir=Path(root_dir) / "data" / "vectorization_temp",
+        work_dir=None,
     )
     if not curve_list.curves:
         raise RuntimeError("图像转曲线完成，但没有生成有效曲线。")

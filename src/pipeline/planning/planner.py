@@ -28,6 +28,7 @@ class PlanningConfig:
     max_multistart_starts: int = 24
     two_opt_passes: int = 30
     two_opt_curve_limit: int = 120
+    coordinate_mode: str = "fit"
 
 
 class TrajectoryPlanner:
@@ -67,6 +68,15 @@ class TrajectoryPlanner:
     def _transform_curves(self, curves: List[Curve2D]) -> List[Curve2D]:
         if not curves:
             return []
+        if self.config.coordinate_mode == "preserve_mm":
+            theta = math.radians(self.config.rotation_deg)
+            c, s = math.cos(theta), math.sin(theta)
+            return [Curve2D(points=[
+                [x * c - y * s + self.config.center_x_mm,
+                 x * s + y * c + self.config.center_y_mm] for x, y in curve.points
+            ], curve_id=curve.curve_id, closed=curve.closed) for curve in curves]
+        if self.config.coordinate_mode != "fit":
+            raise ValueError("Unknown coordinate mode")
 
         all_points = np.array([point for curve in curves for point in curve.points], dtype=float)
         if all_points.size == 0:
@@ -277,6 +287,9 @@ class TrajectoryPlanner:
                 x, y = sampled[0]
                 output.append(self._make_point(point_id, curve.curve_id, x, y, self._lift_z_mm(), self.config.travel_speed_mm_s, False))
                 point_id += 1
+                if self.config.coordinate_mode == "preserve_mm":
+                    output.append(self._make_point(point_id, curve.curve_id, x, y, self.config.draw_z_mm, self.config.travel_speed_mm_s, False))
+                    point_id += 1
             for x, y in sampled:
                 output.append(self._make_point(point_id, curve.curve_id, x, y, self.config.draw_z_mm, self.config.drawing_speed_mm_s, True))
                 point_id += 1

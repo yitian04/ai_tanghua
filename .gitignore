@@ -1,4 +1,5 @@
 data/
+.artifacts/
 tools/*
 !tools/README.md
 .venv/

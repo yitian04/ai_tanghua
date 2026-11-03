@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import streamlit as st
+from apps.gui.parameter_ui import ui as st
 import yaml
 
 from src.robot.ur5.execution_profile import URScriptExecutionProfile, execution_profile_from_config
@@ -17,26 +17,39 @@ _PROFILE_KEYS = {
 }
 
 
-def render_urscript_execution_profile(config: dict) -> URScriptExecutionProfile:
+def render_urscript_execution_profile(config: dict,root_dir=None) -> URScriptExecutionProfile:
+    if root_dir:
+        from apps.gui.parameter_ui import parameter_scope
+        with parameter_scope(root_dir,'execution'):return _render_execution_profile(config)
+    return _render_execution_profile(config)
+
+
+def _render_execution_profile(config: dict) -> URScriptExecutionProfile:
+    from apps.gui.robot_help import help_button
+    title,info=st.columns([4,1])
+    title.markdown('### 执行参数')
+    with info:help_button('execution')
     defaults = execution_profile_from_config(config)
     st.caption("UR5/URScript 导出参数：影响 URP 和直接发送 URScript，不写入通用 trajectory.json。")
+    st.caption("切换出料开关后等待，再继续运动。指令速度取轨迹目标点速度与执行上限中的较小值；准备姿态速度另行限制。")
+    st.caption("整个任务固定 10% 控制器倍率（包括绘制）；名义指令速度不等于实际测量速度。")
     col_a, col_b, col_c = st.columns(3)
     output_on_delay_ms = col_a.number_input(
-        "DO 打开延时 ms",
+        "出料后等待 ms",
         min_value=0.0,
         value=float(st.session_state.get(_PROFILE_KEYS["output_on_delay_ms"], defaults.output_on_delay_ms)),
         step=10.0,
         key=_PROFILE_KEYS["output_on_delay_ms"],
     )
     output_off_delay_ms = col_b.number_input(
-        "DO 关闭延时 ms",
+        "收料后等待 ms",
         min_value=0.0,
         value=float(st.session_state.get(_PROFILE_KEYS["output_off_delay_ms"], defaults.output_off_delay_ms)),
         step=10.0,
         key=_PROFILE_KEYS["output_off_delay_ms"],
     )
     blend_radius_mm = col_c.number_input(
-        "blend mm",
+        "转弯圆滑程度 mm",
         min_value=0.0,
         value=float(st.session_state.get(_PROFILE_KEYS["blend_radius_mm"], defaults.blend_radius_mm)),
         step=0.1,
@@ -45,14 +58,14 @@ def render_urscript_execution_profile(config: dict) -> URScriptExecutionProfile:
 
     col_d, col_e = st.columns(2)
     max_speed_mm_s = col_d.number_input(
-        "URScript最高速度 mm/s",
+        "执行速度上限 mm/s",
         min_value=1.0,
         value=float(st.session_state.get(_PROFILE_KEYS["max_speed_mm_s"], defaults.max_speed_mm_s)),
         step=50.0,
         key=_PROFILE_KEYS["max_speed_mm_s"],
     )
     acceleration_m_s2 = col_e.number_input(
-        "URScript加速度 m/s²",
+        "加速度 m/s²",
         min_value=0.001,
         value=float(st.session_state.get(_PROFILE_KEYS["acceleration_m_s2"], defaults.acceleration_m_s2)),
         step=0.01,

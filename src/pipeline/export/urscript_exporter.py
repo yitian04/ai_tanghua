@@ -19,22 +19,40 @@ def export_trajectory_urscript(
     template_path: str | Path | None = None,
     **compile_options,
 ) -> Path:
+    import base64,json,secrets
+    from src.robot.ur5.guarded_script import build_guarded_script
+    config=compile_options.pop('path_config',None)
+    if config is None:raise ValueError('机器人程序导出需要已验证的示教路径。')
+    if output_pin!=config['output_pin']:raise ValueError('导出端口必须与已验证路径相同。')
+    options=dict(compile_options)
+    options.update(output_on_delay_s=float(output_on_delay_ms)/1000,
+                   output_off_delay_s=float(output_off_delay_ms)/1000,blend_radius_m=float(blend_radius_mm)/1000)
+    script=build_guarded_script(trajectory,config,secrets.randbelow(2147483645)+1,options)
+    manifest={'trajectory':trajectory.to_dict(),'path_config':config,'options':options}
+    encoded=base64.b64encode(json.dumps(manifest,allow_nan=False).encode()).decode()
+    header=['# tanghua_control_v1']+['# data: '+encoded[n:n+100] for n in range(0,len(encoded),100)]+['# end_tanghua_control']
+    script='\n'.join(header)+'\n'+script
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    script = compile_urscript(
-        trajectory,
-        output_pin=int(output_pin),
-        output_on_delay_s=max(0.0, float(output_on_delay_ms)) / 1000.0,
-        output_off_delay_s=max(0.0, float(output_off_delay_ms)) / 1000.0,
-        blend_radius_m=max(0.0, float(blend_radius_mm)) / 1000.0,
-        program_name=str(compile_options.pop("program_name", "Program")),
-        **compile_options,
-    )
     if output.suffix.lower() == ".urp":
         output.write_text(_build_urp_xml(script, output.stem, template_path), encoding="utf-8")
     else:
         output.write_text(script, encoding="utf-8")
     return output
+
+
+def load_controlled_program(path):
+    """Only our generated, embedded manifest is accepted; never eval URScript."""
+    import base64,json
+    text=Path(path).read_text(encoding='utf-8-sig')
+    if '<!DOCTYPE' in text.upper() or '<!ENTITY' in text.upper():raise ValueError('不支持此程序文件。')
+    if Path(path).suffix.lower()=='.urp':text=ET.fromstring(text).findtext('.//cachedContents','')
+    lines=text.splitlines()
+    if not lines or lines[0]!='# tanghua_control_v1':raise ValueError('仅支持本项目生成的受监控机器人程序。')
+    end=lines.index('# end_tanghua_control')
+    if not all(line.startswith('# data: ') for line in lines[1:end]):raise ValueError('程序清单损坏。')
+    data=json.loads(base64.b64decode(''.join(line[8:] for line in lines[1:end]),validate=True))
+    return Trajectory.from_dict(data['trajectory']),data['path_config'],data['options']
 
 
 def _build_urp_xml(script: str, program_name: str, template_path: str | Path | None = None) -> str:

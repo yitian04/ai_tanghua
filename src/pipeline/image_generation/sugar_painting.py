@@ -19,23 +19,24 @@ from src.pipeline.image_generation.quality import ImageQualityReport, evaluate_t
 from src.pipeline.image_generation.project_defaults import ProjectDefaultsStore
 
 
-PROMPT_VERSION = 6
+PROMPT_VERSION = 7
 
 
 SAMPLE_PROMPT_TEMPLATE_ZH = """生成一幅以“{{OBJECT}}”为主体的中国传统民间糖画。
 
-画面为纯白背景上的琥珀金色糖线图案，主体完整、居中、轮廓清楚，具有传统糖画的手工曲线韵味。
+在纯白、无纹理的背景上，以琥珀金色糖浆拉丝绘制。主体完整、居中，占据画面主要位置，轮廓清楚、留白充足，整体具有中国传统民间糖画的质朴审美与手工曲线韵味。
 
-糖线设计：
-- 使用清晰、流畅、粗细协调的单线糖丝塑造主体。
-- 主轮廓由尽可能连续的长曲线构成，转折自然圆润。
+糖线呈现真实手工浇注的流动感和温度感，像铜勺在石板上快速走线留下的糖丝。线条以清晰、流畅、粗细协调的单根实心糖丝为主，允许轻微自然的粗细变化和少量收尾尖角，呈现温润的琥珀光泽与轻微糖质厚度感。
+
+造型与结构：
+- 准确保留主体最重要的外形特征、姿态和关键识别结构，使形象明确可辨。
+- 主轮廓尽量由连续的长曲线一气呵成，转折自然圆润，减少无意义的短线和断点。
 - 所有糖线相互关联并归入主体结构，形成完整连贯的糖线网络。
-- 每一条内部糖线至少有一端自然连接主轮廓或主体主干线。
-- 内部纹样保持简洁，只保留能够帮助识别主体的线条。
-- 主体确实需要内部纹样时，只使用少量、必要的独立结构线；每条线都有清楚的造型作用。
-- 相邻糖线之间保留稳定、清楚的白色间隔，整体疏密均衡。
+- 每条内部糖线至少有一端自然连接主轮廓或主体主干线。
+- 内部纹样保持简洁，只使用少量有助于辨识主体的必要结构线，每条线都有清楚的造型作用。
+- 相邻糖线之间保留稳定、清楚的白色间隔，整体疏密均衡、层次清楚。
 
-呈现一幅线条清晰、连续、简洁、具有传统民间气质的中国糖画。"""
+最终呈现一幅线条清晰、连续、简洁，既有真实糖浆材质感，又有传统民间手工气质的中国糖画。"""
 
 
 SAMPLE_PROMPT_TEMPLATE_EN = """Create a traditional Chinese folk sugar painting of {{OBJECT}}.
@@ -114,7 +115,7 @@ SAMPLE_PROMPT_TEMPLATE = SAMPLE_PROMPT_TEMPLATE_ZH
 LINE_ART_PROMPT_TEMPLATE = LINE_ART_PROMPT_TEMPLATE_ZH
 
 SAMPLE_NEGATIVE_PROMPTS = {
-    "zh": "照片，写实场景，三维雕塑，文字，边框，阴影，渐变，高光，纹理，大面积填充，实心色块，黑色块，糖浆色块，粗带，面状糖片，双边轮廓，重复偏移轮廓，轮廓回声，单线变多线，拥挤线条，过密排线，粘连排线，交叉排线，混乱排线，断裂糖线，孤立糖线，悬空短线，无关装饰",
+    "zh": "照片，写实场景，三维雕塑，电脑描边，矢量图形，绝对均匀线宽，文字，边框，阴影，渐变，强烈高光，复杂纹理，大面积填充，实心色块，黑色块，糖浆色块，粗带，面状糖片，双边轮廓，重复偏移轮廓，轮廓回声，单线变多线，拥挤线条，过密排线，粘连排线，交叉排线，混乱排线，断裂糖线，孤立糖线，悬空短线，无关装饰",
     "en": "photograph, photorealistic scene, 3D sculpture, text, frame, shadow, gradient, highlight, texture, filled region, solid block, black block, syrup mass, thick ribbon, sugar sheet, double-edge contour, repeated offset contour, contour echo, one line becoming multiple lines, crowded lines, dense hatching, merged hatching, crossing hatching, tangled hatching, broken sugar line, isolated sugar line, floating short stroke, unrelated decoration",
 }
 
@@ -333,6 +334,7 @@ class SugarPaintingService:
         return task
 
     def save(self, task: SugarPaintingTask) -> Path:
+        self.archive_remote_records(task.task_id)
         task.updated_at = _timestamp()
         directory = self._task_dir(task.task_id)
         directory.mkdir(parents=True, exist_ok=True)
@@ -345,6 +347,20 @@ class SugarPaintingService:
         active_temporary.write_text(task.task_id + "\n", encoding="utf-8")
         active_temporary.replace(active_path)
         return path
+
+    def _image_dir(self,task_id: str) -> Path:
+        # Images are drafts; task/recovery records remain in the durable task log.
+        self._task_dir(task_id)  # validate the identifier using the existing guard
+        path=self.root_dir/'data'/'.drafts'/'ai_tasks'/task_id
+        path.mkdir(parents=True,exist_ok=True)
+        return path
+
+    def archive_remote_records(self,task_id: str) -> None:
+        source=self.root_dir/'data'/'.drafts'/'ai_tasks'/task_id
+        destination=self._task_dir(task_id)/'remote_records'
+        for record in source.glob('*.remote.json'):
+            destination.mkdir(parents=True,exist_ok=True)
+            shutil.copy2(record,destination/record.name)
 
     def load_active_task(self) -> SugarPaintingTask | None:
         active_path = self.task_root.parent / "current_task.txt"
@@ -371,7 +387,7 @@ class SugarPaintingService:
         reference_image: str | Path | None = None,
     ) -> SugarPaintingTask:
         attempt = len(task.sample_attempts) + 1
-        output = self._task_dir(task.task_id) / f"sample_a{attempt}.{options.output_format}"
+        output = self._image_dir(task.task_id) / f"sample_a{attempt}.{options.output_format}"
         stage_options = (
             _with_stage_negative_prompt(
                 options,
@@ -418,7 +434,7 @@ class SugarPaintingService:
         reference_image: str | Path | None = None,
     ) -> SugarPaintingTask:
         attempt = len(task.sample_attempts) + 1
-        output = self._task_dir(task.task_id) / f"sample_a{attempt}.png"
+        output = self._image_dir(task.task_id) / f"sample_a{attempt}.png"
         _save_uploaded_image(payload, output)
         task.sample_image = str(output)
         task.sample_public_url = ""
@@ -524,7 +540,7 @@ class SugarPaintingService:
         run_count = 2 if auto_retry_once else 1
         for run_index in range(run_count):
             attempt = len(task.line_art_attempts) + 1
-            output = self._task_dir(task.task_id) / f"lineart_a{attempt}.{options.output_format}"
+            output = self._image_dir(task.task_id) / f"lineart_a{attempt}.{options.output_format}"
             retry_suffix = LINE_ART_RETRY_SUFFIXES[_normalize_prompt_language(task.prompt_language)]
             prompt = compose_stage_prompt(task, "line_art") + (
                 retry_suffix if run_index else ""
@@ -578,7 +594,7 @@ class SugarPaintingService:
         if not task.sample_confirmed:
             raise ValueError("必须先确认糖画参考图，才能恢复第二阶段结果。")
         attempt = len(task.line_art_attempts) + 1
-        output = self._task_dir(task.task_id) / f"lineart_a{attempt}.{options.output_format}"
+        output = self._image_dir(task.task_id) / f"lineart_a{attempt}.{options.output_format}"
         result = provider.recover_completed_task(remote_task_id, output)
         report = evaluate_traceable_line_image(result.output_path)
         task.line_art_image = str(result.output_path)
@@ -600,7 +616,7 @@ class SugarPaintingService:
         if not task.sample_confirmed:
             raise ValueError("必须先确认糖画样图，才能上传对应线稿。")
         attempt = len(task.line_art_attempts) + 1
-        output = self._task_dir(task.task_id) / f"lineart_a{attempt}.png"
+        output = self._image_dir(task.task_id) / f"lineart_a{attempt}.png"
         _save_uploaded_image(payload, output)
         report = evaluate_traceable_line_image(output)
         task.line_art_image = str(output)

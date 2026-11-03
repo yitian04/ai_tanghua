@@ -5,7 +5,8 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-import streamlit as st
+from apps.gui.parameter_ui import ui as st
+from apps.gui.asset_library import file_input, image_input
 from PIL import Image
 
 from apps.gui.views.file_naming import build_output_path, infer_prefix_from_path, sanitize_filename
@@ -229,35 +230,10 @@ def render(config: dict, root_dir: str) -> None:
     control_col, result_col = st.columns([0.85, 1.65])
 
     with control_col:
-        st.markdown("#### 图像输入")
-        uploaded_image = st.file_uploader(
-            "上传本地图像",
-            type=["png", "jpg", "jpeg", "webp", "bmp"],
-            help="支持 PNG、JPG、JPEG、WEBP 和 BMP；上传后会自动保存到项目的 data/images/uploads 目录。",
-            key="vector_image_upload",
-        )
-        if "vector_image_path" not in st.session_state:
-            st.session_state["vector_image_path"] = st.session_state.get("latest_image_path", "")
-        if uploaded_image is not None:
-            payload = uploaded_image.getvalue()
-            digest = hashlib.sha256(payload).hexdigest()[:10]
-            original_name = Path(uploaded_image.name)
-            safe_stem = sanitize_filename(original_name.stem, "uploaded_image")
-            extension = original_name.suffix.lower() or ".png"
-            upload_dir = Path(root_dir) / "data" / "images" / "uploads"
-            upload_dir.mkdir(parents=True, exist_ok=True)
-            upload_path = upload_dir / f"{safe_stem}_{digest}{extension}"
-            if not upload_path.exists():
-                upload_path.write_bytes(payload)
-            st.session_state["vector_image_path"] = str(upload_path)
-            st.session_state["latest_image_path"] = str(upload_path)
-            st.caption(f"已载入：{uploaded_image.name}")
-
-        image_path = st.text_input(
-            "或输入图像文件路径",
-            key="vector_image_path",
-            help="也可以直接填写本机已有图像的完整路径。",
-        )
+        image_path = file_input(root_dir, "vector", "图像输入", {"image"}, candidate=st.session_state.get("latest_image_path"))
+        if image_path:
+            st.session_state["vector_image_path"] = image_path
+            st.session_state["latest_image_path"] = image_path
         show_source_image = st.checkbox("在曲线上叠加原图", value=True)
         source_alpha = st.slider("原图透明度", 0.0, 1.0, 0.35, 0.05, disabled=not show_source_image)
 
@@ -363,7 +339,7 @@ def render(config: dict, root_dir: str) -> None:
 
     with result_col:
         if not image_path:
-            st.info("请上传本地图像，或输入已有图像的完整路径。")
+            st.info("请本地上传图像，或从素材库选择并确认。")
         elif binary_ready:
             _render_binary_preview(st.session_state["vector_binary_preview"], st.session_state["vector_binary_analysis"])
 
@@ -408,7 +384,7 @@ def render(config: dict, root_dir: str) -> None:
                 vectorizer=vectorizer,  # type: ignore[arg-type]
                 outline_engine=outline_engine,  # type: ignore[arg-type]
                 svg_output_path=svg_output,
-                work_dir=Path(root_dir) / "data" / "vectorization_temp",
+                work_dir=None,
                 progress_callback=update_progress,
             )
         except VectorizationToolError as exc:

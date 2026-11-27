@@ -115,6 +115,20 @@ class LocalComfyTests(unittest.TestCase):
         self.assertEqual(graph["noise"]["inputs"]["noise_seed"], 91)
         self.assertEqual(graph["guider"]["inputs"]["positive"], ["reference", 0])
 
+    def test_shop_uses_the_current_local_comfy_choice_over_the_saved_sample_default(self):
+        from src.pipeline.shop_creation import shared_image_provider
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "config").mkdir()
+            (root / "config" / "ai_generation_defaults.json").write_text(
+                '{"stages":{"sample":{"source":"siliconflow","provider_id":"siliconflow","model_id":"Qwen/Qwen-Image"}}}',
+                encoding="utf-8",
+            )
+            for choice in ("本地 ComfyUI", "comfyui"):
+                provider, _options = shared_image_provider(root, {"model_source_stage_1": choice})
+                self.assertEqual(provider.provider_id, "comfyui")
+
     def test_page_restores_local_model_and_can_retry_after_failure(self):
         from streamlit.testing.v1 import AppTest
         from src.pipeline.shop_creation import shared_image_provider

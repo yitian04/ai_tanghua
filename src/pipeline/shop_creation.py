@@ -61,11 +61,14 @@ def shared_image_provider(root, session=None):
     if runtime:
         return deepcopy(runtime[0]),deepcopy(runtime[1])
     selection = ProjectDefaultsStore(root).stage('sample')
-    source = session.get('model_source_stage_1', '') or PreferenceStore(root).current('ai').get('model_source_stage_1', '')
+    chosen = session.get('model_source_stage_1', '') or PreferenceStore(root).current('ai').get('model_source_stage_1', '')
     labels = {'硅基流动（中国大陆 API）':'siliconflow', 'BananaPro（多模型 API）':'bananapro',
-              'Pi 模型中心（订阅 / OAuth / API Key）':'pi', '自定义兼容 API':'compatible'}
-    source = labels.get(source, selection['source'])
-    if source == "comfyui" or source == "本地 ComfyUI":
+              'Pi 模型中心（订阅 / OAuth / API Key）':'pi', '自定义兼容 API':'compatible',
+              '本地 ComfyUI':'comfyui'}
+    # Widget values are display labels. A saved id is already canonical.
+    # An empty or unknown value keeps the saved sample-stage default.
+    source = labels.get(chosen, chosen if chosen in set(labels.values()) else selection['source'])
+    if source == "comfyui":
         from src.pipeline.image_generation.local_comfy import LocalImageProvider, LocalSettings
         return LocalImageProvider(LocalSettings.load(root)), ImageRequestOptions(size="1536x864")
     provider_id = source if source in ('bananapro','siliconflow') else selection['provider_id']

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Callable, Literal, Sequence
 
 import cv2
 import numpy as np
@@ -10,6 +10,7 @@ import numpy as np
 from src.core.models import Curve2D, CurveList
 from src.core.image_pixels import white_background_array
 from src.pipeline.vectorization import parse_svg_to_curve_list, vectorize_binary_with_cli
+from src.pipeline.vectorization.gaussian_bezier import LINE_FIT_ID, PAPER_DOI
 
 
 Point = tuple[float, float]
@@ -209,6 +210,8 @@ def vectorize_image_to_curve_list(
         "component_count": int(analysis["component_count"]),
         "line_component_count": int(analysis["line_component_count"]),
         "area_component_count": int(analysis["area_component_count"]),
+        "line_fit": LINE_FIT_ID,
+        "line_fit_reference": PAPER_DOI,
     }
     _report(progress_callback, 1.0, "曲线生成完成")
     return CurveList(curves=curves, coordinate_frame="image_px", metadata=metadata)
@@ -355,6 +358,8 @@ def _vectorize_image_with_mixed_stroke_backend(
         "component_count": int(len(components)),
         "line_component_count": int(len(line_components)),
         "area_component_count": int(len(area_components)),
+        "line_fit": LINE_FIT_ID,
+        "line_fit_reference": PAPER_DOI,
     }
     curve_list = CurveList(curves=curves, coordinate_frame="image_px", metadata=metadata)
     _report(progress_callback, 1.0, "curves generated")
@@ -690,18 +695,50 @@ def _line_component_to_curves(
     smooth_iterations: int,
     force_single_path: bool,
 ) -> list[Curve]:
-    from src.pipeline.vectorization.centerline import thin, trace, regularize, refine_network, join_continuations
+    from src.pipeline.vectorization.centerline import thin, trace, refine_network, join_continuations
+    from src.pipeline.vectorization.gaussian_bezier import fit_solid_stroke
     # Thinning, unlike erosion, preserves the topology of thick ink strokes.
+    # Short edges that only exist to tie a junction together are kept; the
+    # length arguments remain part of the call contract and are not a filter.
+    del min_path_length, min_curve_length_px, force_single_path
     skeleton = thin(mask)
     paths = refine_network(trace(skeleton))
-    curves = []
+    endpoint_counts: dict[tuple[float, float], int] = {}
+    closed_flags: list[bool] = []
     for path in paths:
+        closed = len(path) >= 3 and _same_skeleton_point(path[0], path[-1])
+        closed_flags.append(closed)
+        if not closed and len(path) >= 2:
+            for endpoint in (path[0], path[-1]):
+                key = _skeleton_point_key(endpoint)
+                endpoint_counts[key] = endpoint_counts.get(key, 0) + 1
+    curves = []
+    for path, closed in zip(paths, closed_flags):
+        if len(path) < 2:
+            continue
         points = [(float(x + offset[0]), float(y + offset[1])) for y, x in path]
-        # Internal short edges join junctions and must never be length-filtered.
-        points = regularize(points, simplify_epsilon, smooth_iterations)
+        fix_start = (not closed) and endpoint_counts.get(_skeleton_point_key(path[0]), 0) >= 2
+        fix_end = (not closed) and endpoint_counts.get(_skeleton_point_key(path[-1]), 0) >= 2
+        points = fit_solid_stroke(
+            points,
+            mask,
+            offset,
+            epsilon=simplify_epsilon,
+            smooth=smooth_iterations,
+            fix_start=fix_start,
+            fix_end=fix_end,
+        )
         if len(points) >= 2:
-            curves.append([tuple(p) for p in points])
+            curves.append([tuple(point) for point in points])
     return join_continuations(curves)
+
+
+def _skeleton_point_key(point: Sequence) -> tuple[float, float]:
+    return (round(float(point[0]), 5), round(float(point[1]), 5))
+
+
+def _same_skeleton_point(first: Sequence, second: Sequence) -> bool:
+    return _skeleton_point_key(first) == _skeleton_point_key(second)
 
 
 def _area_component_to_curves(

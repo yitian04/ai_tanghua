@@ -1,4 +1,5 @@
 """Pure preview rendering. Never calls Streamlit from worker threads."""
+from src.core.image_pixels import white_background
 import io
 import json
 from pathlib import Path
@@ -16,7 +17,7 @@ def _render(payload, name, kind, small=False):
     from PIL import Image
     if kind=='image':
         with Image.open(io.BytesIO(payload)) as image:
-            image.thumbnail((320,220) if small else (640,400));output=io.BytesIO();image.convert('RGB').save(output,format='PNG');return output.getvalue()
+            image.thumbnail((320,220) if small else (640,400));output=io.BytesIO();white_background(image).save(output,format='PNG');return output.getvalue()
     if kind not in {'curve','trajectory','svg'}: return None
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_agg import FigureCanvasAgg

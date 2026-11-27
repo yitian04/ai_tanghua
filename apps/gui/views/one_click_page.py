@@ -1,5 +1,7 @@
 ﻿from __future__ import annotations
 
+from apps.gui.image_viewer import image_viewer, figure_viewer
+
 from pathlib import Path
 from typing import Callable
 
@@ -8,6 +10,7 @@ import numpy as np
 import streamlit as st
 from matplotlib.collections import LineCollection
 from PIL import Image
+from src.core.image_pixels import white_background
 
 from apps.gui.views.file_naming import build_output_path, infer_prefix_from_path, sanitize_filename
 from apps.gui.views.planning_page import _planning_defaults
@@ -170,7 +173,7 @@ def _run_pipeline(
     robot_ip: str,
     update_step: Callable[[str, str], None],
 ) -> tuple[CurveList, Trajectory, Path, Path, dict]:
-    image = Image.open(source).convert("RGB")
+    image = white_background(Image.open(source))
     image_array = np.array(image)
     prefix = sanitize_filename(st.session_state.get("job_name") or infer_prefix_from_path(str(source), "job"), "job")
 
@@ -192,7 +195,6 @@ def _run_pipeline(
 
     update_step("图像转曲线", "运行中")
     curves_path = build_output_path(root_dir, "curves", prefix, "curves", "json")
-    svg_output = build_output_path(root_dir, "curves", prefix, "strokes", "svg")
     curve_list = vectorize_image_to_curve_list(
         image_array,
         threshold_method=VECTOR_DEFAULTS["threshold_method"],
@@ -212,7 +214,6 @@ def _run_pipeline(
         source_image=str(source),
         vectorizer=str(VECTOR_DEFAULTS["vectorizer"]),
         outline_engine=str(VECTOR_DEFAULTS["outline_engine"]),
-        svg_output_path=svg_output,
         work_dir=None,
     )
     if not curve_list.curves:
@@ -331,7 +332,7 @@ def render(config: dict, root_dir: str) -> None:
 
         tab_binary, tab_curves, tab_trajectory = st.tabs(["二值化", "曲线预览", "轨迹预览"])
         with tab_binary:
-            st.image(Image.fromarray(binary["preview"]), width="stretch")
+            image_viewer(Image.fromarray(binary["preview"]), width="stretch")
             st.caption(
                 f"components={binary['analysis'].get('component_count')}; "
                 f"line={binary['analysis'].get('line_component_count')}; "
@@ -339,11 +340,11 @@ def render(config: dict, root_dir: str) -> None:
             )
         with tab_curves:
             fig = _plot_curves(curve_list, image_size=binary.get("image_size"))
-            st.pyplot(fig, width="content")
+            figure_viewer(fig, width="content")
             plt.close(fig)
         with tab_trajectory:
             fig = _plot_trajectory_xy(trajectory)
-            st.pyplot(fig, width="content")
+            figure_viewer(fig, width="content")
             plt.close(fig)
     if execute_clicked:
         try:

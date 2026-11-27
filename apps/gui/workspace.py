@@ -12,12 +12,13 @@ from src.core.assets import AssetLibrary
 from src.core.drafts import Artifact,Draft,DraftStore
 
 _CONTEXT=ContextVar('workspace',default=None)
-GROUPS={'AI糖画线稿':'ai','图像转曲线':'vector','AI SVG 曲线':'svg','轨迹规划':'planning','文字轨迹':'text','轨迹合成':'composition','数字文件':'export','机器人控制':'robot'}
-INPUTS={'svg':('svg_reference',),'ai':('stage1_reference','stage2_sample'),'vector':('vector',),'planning':('planning',),'composition':('composition_objects',),'export':('export',),'robot':('robot',)}
-GENERATE={'生成 SVG 曲线','生成文字轨迹','生成曲线','生成三维轨迹文件','导出 CSV','导出 G-code','导出 URP','生成糖画样图','重新生成样图','从确认样图提取线稿','重新提取线稿','使用上传图片作为线稿','恢复远程任务结果','新建任务','载入参考图并进入第二阶段'}
+GROUPS={'理想小店（白盒）':'shop','AI糖画线稿':'ai','图像转曲线':'vector','AI SVG 曲线':'svg','轨迹规划':'planning','文字轨迹':'text','轨迹合成':'composition','数字文件':'export','机器人控制':'robot'}
+INPUTS={'shop':('shop_template','shop_example'),'svg':('svg_reference',),'ai':('stage1_reference','stage2_sample'),'vector':('vector',),'planning':('planning',),'composition':('composition_objects',),'export':('export',),'robot':('robot',)}
+GENERATE={'提取并合成','生成 SVG 曲线','生成文字轨迹','生成曲线','生成三维轨迹文件','导出 CSV','导出 G-code','导出 URP','生成糖画样图','重新生成样图','从确认样图提取线稿','重新提取线稿','生成黑白线稿','重新生成线稿','使用上传图片作为线稿','恢复远程任务结果','新建任务','载入参考图并进入第二阶段'}
 TRANSFERS={'进入轨迹规划','加入轨迹合成','前往数字文件导出','确认线稿并交给曲线模块','人工放行并进入曲线测试'}
 HIDDEN_DEFAULTS={'设为默认值','设为URScript默认值','保存为项目默认模型'}
 RESULT_KEYS={
+ 'shop':('shop_result','shop_ai_result'),
  'svg':('svg_result','svg_raw','svg_ack','svg_job','svg_claimed','svg_job_error'),
  'text':('text_trajectory_result','latest_trajectory_path'),
  'planning':('planning_result','latest_trajectory_path'),
@@ -80,7 +81,7 @@ def clear_result(group):
 
 def clear_page(group):
     clear_result(group)
-    prefixes={'svg':('svg_',),'ai':('ai_sugar_','stage1_','stage2_','positive_prompt_','negative_prompt_','subject_instruction_','recover_bananapro_'), 'vector':('vector_',), 'planning':('planning_',), 'text':('text_trajectory_',), 'composition':('composition_',)}.get(group,())
+    prefixes={'shop':('shop_',),'svg':('svg_',),'ai':('ai_sugar_','stage1_','stage2_','positive_prompt_','negative_prompt_','subject_instruction_','recover_bananapro_'), 'vector':('vector_',), 'planning':('planning_',), 'text':('text_trajectory_',), 'composition':('composition_',)}.get(group,())
     for key in list(st.session_state):
         if isinstance(key,str) and (key.startswith(prefixes) if prefixes else False):st.session_state.pop(key,None)
     for key in list(st.session_state):
@@ -164,7 +165,7 @@ def action_button(target,label,*args,**kwargs):
     if label in HIDDEN_DEFAULTS or ('项目默认' in label and '模型' in label):return False
     context=_CONTEXT.get()
     if not context:return target(label,*args,**kwargs)
-    group=context['group'];canonical={'生成糖画样图':'sample_generate','重新生成样图':'sample_generate','从确认样图提取线稿':'lineart_generate','重新提取线稿':'lineart_generate'}
+    group=context['group'];canonical={'生成糖画样图':'sample_generate','重新生成样图':'sample_generate','从确认样图提取线稿':'lineart_generate','重新提取线稿':'lineart_generate','生成黑白线稿':'direct_generate','重新生成线稿':'direct_generate'}
     token=str(kwargs.get('key') or canonical.get(label,label))
     running=st.session_state.get('wf_running',False)
     if running:kwargs['disabled']=True
@@ -215,13 +216,33 @@ def collect(group):
         if not bad:artifacts.insert(0,Artifact(name+'_trajectory.json',json.dumps(compose(doc).to_dict(),ensure_ascii=False,indent=2).encode(),'compositions'))
         s['drafts'][group]=Draft(artifacts,revision,not bad,'超出画布，请调整后再保存。' if bad else '')
         return
+    if group=='shop':
+        image=st.session_state.get('shop_ai_result')
+        if st.session_state.get('shop_creation_state',{}).get('mode')=='ai' and image and Path(image['path']).is_file():
+            payload=Path(image['path']).read_bytes();revision=hashlib.sha256(payload).hexdigest()
+            if not draft(group) or draft(group).revision!=revision:
+                s['drafts'][group]=Draft([Artifact('小店参考_'+image['style']+'.png',payload,'images',image['path'])],revision)
+            return
+        result=st.session_state.get('shop_result')
+        if not result:return
+        payload=json.dumps(result['merged'].to_dict(),ensure_ascii=False,indent=2).encode()
+        revision=hashlib.sha256(payload).hexdigest()
+        if not draft(group) or draft(group).revision!=revision:
+            s['drafts'][group]=Draft([Artifact('理想小店_合并曲线.json',payload,'curves')],revision)
+            if result.get('content') and result['content'].metadata.get('source')=='freehand':
+                raw=json.dumps(result['content'].to_dict(),ensure_ascii=False,indent=2).encode()
+                s['drafts'][group].artifacts.append(Artifact('理想小店_手绘原稿.json',raw,'curves'))
+        value=draft(group)
+        value.valid=result['signature']==st.session_state.get('shop_current_signature')
+        value.error='' if value.valid else '输入已修改，请重新提取并合成。'
+        return
     if group=='svg':
         result=st.session_state.get('svg_result')
         if not result:return
         payload=json.dumps(result['curves'].to_dict(),ensure_ascii=False).encode()
         revision=hashlib.sha256(result['svg'].encode()+payload).hexdigest()
         if not draft(group) or draft(group).revision!=revision:
-            s['drafts'][group]=Draft([Artifact('generated.svg',result['svg'].encode(),'curves'),Artifact('generated_curves.json',payload,'curves')],revision)
+            s['drafts'][group]=Draft([Artifact('generated_curves.json',payload,'curves')],revision)
         value=draft(group)
         value.valid=result['connectivity']['count']<=1 or bool(st.session_state.get('svg_ack'))
         value.error='' if value.valid else '图案含分离部分，请在预览中明确确认后继续。'
@@ -232,7 +253,9 @@ def collect(group):
     elif group in {'vector','planning','export'}:
         folder={'vector':'curves','planning':'trajectories','export':'exports'}[group]
         work=s['workdirs'].get(group)
-        if work:paths=list((Path(root_dir)/'data'/'.drafts'/s['session']/group/work/folder).glob('*'))
+        if work:
+            paths=list((Path(root_dir)/'data'/'.drafts'/s['session']/group/work/folder).glob('*'))
+            if group=='vector':paths=[p for p in paths if p.suffix.lower()=='.json']
     elif group=='ai':
         from src.pipeline.image_generation import SugarPaintingService
         task_id=st.session_state.get('ai_sugar_task_id')
@@ -301,7 +324,7 @@ def _confirmation():
             state().pop('intent',None);st.rerun()
         except (ValueError,OSError) as exc:st.error(f'操作未完成：{exc}')
     if kind=='svg_save':
-        if st.button('确认保存 SVG 与曲线',type='primary',disabled=bool(value and not value.valid)):
+        if st.button('确认保存曲线 JSON',type='primary',disabled=bool(value and not value.valid)):
             try:publish(group);state().pop('intent',None);st.rerun()
             except Exception as exc:st.error(str(exc))
         if st.button('取消'):state().pop('intent',None);st.rerun()

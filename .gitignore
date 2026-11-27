@@ -2,6 +2,13 @@ data/
 .artifacts/
 tools/*
 !tools/README.md
+!tools/generate_shop_samples.py
+!tools/prepare_shop_references.py
+!tools/compare_shop_models.py
+!tools/revise_shop_catalog.py
+!tools/benchmark_local_comfy.py
+!tools/install_local_klein.py
+outputs/local_comfy/
 .venv/
 node_modules/
 __pycache__/

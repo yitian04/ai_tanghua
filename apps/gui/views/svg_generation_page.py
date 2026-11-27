@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from apps.gui.image_viewer import image_viewer, figure_viewer
 import hashlib
 import json
 from pathlib import Path
@@ -77,12 +79,12 @@ def _output(root_dir):
     st.caption('返回模型：'+str(result['model'])+' · 用量：'+json.dumps(result['usage'],ensure_ascii=False))
     left,right=st.tabs(['SVG 原图','有序曲线'],key='svg_preview_tabs',on_change='rerun')
     with left:
-        st.markdown('**SVG 原图**');st.image(result['svg'],width='stretch')
+        st.markdown('**SVG 原图**');image_viewer(result['svg'],width='stretch')
     with right:
         st.markdown('**转换后的有序曲线**')
         from apps.gui.views.vector_page import _plot_curves
         import matplotlib.pyplot as plt
-        fig=_plot_curves(result['curves']);fig.axes[0].invert_yaxis();fig.axes[0].set_xlabel('SVG X');fig.axes[0].set_ylabel('SVG Y');st.pyplot(fig);plt.close(fig)
+        fig=_plot_curves(result['curves']);fig.axes[0].set_xlabel('SVG X');fig.axes[0].set_ylabel('SVG Y');figure_viewer(fig);plt.close(fig)
     curves=result['curves'];groups=result['connectivity']
     st.caption(f"{len(curves.curves)} 条曲线 · {sum(len(c.points) for c in curves.curves)} 个点 · {groups['count']} 个连通部分（采样几何容差 {groups['tolerance']} SVG 单位）。连通不等于一笔完成。")
     if groups['count']>1:

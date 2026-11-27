@@ -7,6 +7,7 @@ from typing import Any
 import cv2
 import numpy as np
 from PIL import Image
+from src.core.image_pixels import white_background
 
 from src.modules.image_process_module import analyze_binary_content, bridge_small_gaps, threshold_image
 
@@ -20,7 +21,7 @@ class ImageQualityReport:
 
 
 def evaluate_traceable_line_image(image_path: str | Path, *, max_dim: int = 768) -> ImageQualityReport:
-    image = np.array(Image.open(image_path).convert("RGB"))
+    image = np.array(white_background(Image.open(image_path)))
     image = _resize_rgb(image, max_dim=max_dim)
     # Inspect the line art as delivered. Blur/closing can hide broken strokes
     # and can also fuse a row of nearby hatch lines into a false solid region.

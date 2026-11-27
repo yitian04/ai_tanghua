@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from collections import deque
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Callable, Literal, Sequence
 
 import cv2
 import numpy as np
 
 from src.core.models import Curve2D, CurveList
+from src.core.image_pixels import white_background_array
 from src.pipeline.vectorization import parse_svg_to_curve_list, vectorize_binary_with_cli
+from src.pipeline.vectorization.gaussian_bezier import LINE_FIT_ID, PAPER_DOI
 
 
 Point = tuple[float, float]
@@ -18,7 +20,7 @@ VectorizerMethod = Literal["mixed_stroke_svg", "skeleton_stroke_svg", "outline_s
 OutlineEngine = Literal["auto", "vtracer", "potrace"]
 TraceInputMode = Literal["auto", "line_only", "area_only"]
 ProgressCallback = Callable[[float, str], None]
-DEFAULT_MAX_PROCESS_DIM = 1024
+DEFAULT_MAX_PROCESS_DIM = 2048
 
 
 def image_to_curves(
@@ -79,7 +81,6 @@ def vectorize_image_to_curve_list(
     source_image: str | None = None,
     vectorizer: VectorizerMethod = "skeleton_stroke_svg",
     outline_engine: OutlineEngine = "auto",
-    svg_output_path: str | Path | None = None,
     work_dir: str | Path | None = None,
     cli_timeout_s: int = 45,
     progress_callback: ProgressCallback | None = None,
@@ -104,7 +105,6 @@ def vectorize_image_to_curve_list(
             max_vectorize_dim=max_vectorize_dim,
             stroke_max_width_px=stroke_max_width_px,
             source_image=source_image,
-            svg_output_path=svg_output_path,
             work_dir=work_dir,
             cli_timeout_s=cli_timeout_s,
             progress_callback=progress_callback,
@@ -124,7 +124,6 @@ def vectorize_image_to_curve_list(
             min_curve_length_ratio=min_curve_length_ratio,
             line_simplify_epsilon=line_simplify_epsilon,
             source_image=source_image,
-            svg_output_path=svg_output_path,
             work_dir=work_dir,
             cli_timeout_s=cli_timeout_s,
             max_vectorize_dim=max_vectorize_dim,
@@ -173,7 +172,7 @@ def vectorize_image_to_curve_list(
             closed = True
 
         for raw in raw_curves:
-            if len(raw) >= 2 and _curve_length(raw) >= min_curve_length_px:
+            if len(raw) >= 2:
                 if coordinate_scale != 1.0:
                     raw = [(x * coordinate_scale, y * coordinate_scale) for x, y in raw]
                 curves.append(
@@ -211,6 +210,8 @@ def vectorize_image_to_curve_list(
         "component_count": int(analysis["component_count"]),
         "line_component_count": int(analysis["line_component_count"]),
         "area_component_count": int(analysis["area_component_count"]),
+        "line_fit": LINE_FIT_ID,
+        "line_fit_reference": PAPER_DOI,
     }
     _report(progress_callback, 1.0, "曲线生成完成")
     return CurveList(curves=curves, coordinate_frame="image_px", metadata=metadata)
@@ -236,7 +237,6 @@ def _vectorize_image_with_mixed_stroke_backend(
     max_vectorize_dim: int,
     stroke_max_width_px: float,
     source_image: str | None,
-    svg_output_path: str | Path | None,
     work_dir: str | Path | None,
     cli_timeout_s: int,
     progress_callback: ProgressCallback | None,
@@ -275,7 +275,7 @@ def _vectorize_image_with_mixed_stroke_backend(
             force_single_path=float(component["bbox_aspect"]) >= 2.8,
         )
         for raw in raw_curves:
-            if len(raw) >= 2 and _curve_length(raw) >= min_curve_length_px:
+            if len(raw) >= 2:
                 curves.append(Curve2D(points=[[float(x), float(y)] for x, y in raw], curve_id=len(curves), closed=False))
         _report(progress_callback, 0.2 + 0.35 * ((idx + 1) / max(1, len(line_components))), "extract centerline strokes")
 
@@ -316,13 +316,18 @@ def _vectorize_image_with_mixed_stroke_backend(
                     min_curve_length_px=min_curve_length_px,
                 )
                 for raw in raw_curves:
-                    if len(raw) >= 2 and _curve_length(raw) >= min_curve_length_px:
+                    if len(raw) >= 2:
                         curves.append(Curve2D(points=[[float(x), float(y)] for x, y in raw], curve_id=len(curves), closed=True))
 
     if coordinate_scale != 1.0:
         curves = [_scale_curve2d(curve, coordinate_scale) for curve in curves]
     min_output_length_px = _image_min_curve_length_px(image, min_curve_length_ratio)
-    curves = _postprocess_curve2d(curves, min_length_px=min_output_length_px, overlap_tolerance_px=max(2.0, min_output_length_px * 0.18))
+    if input_mode != "line_only":
+        curves = _postprocess_curve2d(curves, min_length_px=min_output_length_px, overlap_tolerance_px=max(2.0, min_output_length_px * 0.18))
+    else:
+        for curve in curves:
+            curve.closed = curve.points[0] == curve.points[-1]
+
     for idx, curve in enumerate(curves):
         curve.curve_id = idx
 
@@ -353,11 +358,10 @@ def _vectorize_image_with_mixed_stroke_backend(
         "component_count": int(len(components)),
         "line_component_count": int(len(line_components)),
         "area_component_count": int(len(area_components)),
+        "line_fit": LINE_FIT_ID,
+        "line_fit_reference": PAPER_DOI,
     }
     curve_list = CurveList(curves=curves, coordinate_frame="image_px", metadata=metadata)
-    if svg_output_path is not None:
-        _export_stroke_svg(curve_list, svg_output_path, width=int(image.shape[1]), height=int(image.shape[0]))
-        curve_list.metadata["stroke_svg_output_path"] = str(svg_output_path)
     _report(progress_callback, 1.0, "curves generated")
     return curve_list
 
@@ -375,7 +379,6 @@ def _vectorize_image_with_svg_backend(
     min_curve_length_ratio: float,
     line_simplify_epsilon: float,
     source_image: str | None,
-    svg_output_path: str | Path | None,
     work_dir: str | Path | None,
     cli_timeout_s: int,
     max_vectorize_dim: int,
@@ -400,7 +403,6 @@ def _vectorize_image_with_svg_backend(
         vectorizer=vectorizer,  # type: ignore[arg-type]
         outline_engine=outline_engine,
         work_dir=work_dir,
-        svg_output_path=svg_output_path,
         timeout_s=cli_timeout_s,
         speckle_size=max(1, int(round(min_curve_length_px * 0.25))),
     )
@@ -422,9 +424,10 @@ def _vectorize_image_with_svg_backend(
             "bridge_gap_px": int(bridge_gap_px),
             "min_curve_length_ratio": float(min_curve_length_ratio),
             "min_curve_length_px": float(min_curve_length_px),
-            "svg_output_path": str(svg_path),
         },
     )
+    # The backend SVG is an intermediate, not a published curve artifact.
+    curve_list.metadata.pop('source_svg', None)
     if coordinate_scale != 1.0:
         curve_list.curves = [_scale_curve2d(curve, coordinate_scale) for curve in curve_list.curves]
     min_output_length_px = _image_min_curve_length_px(image, min_curve_length_ratio)
@@ -434,9 +437,6 @@ def _vectorize_image_with_svg_backend(
         overlap_tolerance_px=max(2.0, min_output_length_px * 0.18),
     )
     curve_list.curves = curves
-    if svg_output_path is not None:
-        _export_stroke_svg(curve_list, svg_output_path, width=int(image.shape[1]), height=int(image.shape[0]))
-        curve_list.metadata["stroke_svg_output_path"] = str(svg_output_path)
     curve_list.metadata["max_vectorize_dim"] = int(max_vectorize_dim)
     curve_list.metadata["coordinate_scale"] = float(coordinate_scale)
     curve_list.metadata["original_image_size"] = [int(image.shape[1]), int(image.shape[0])]
@@ -501,6 +501,7 @@ def threshold_image(
     if image is None or image.size == 0:
         return np.empty((0, 0), dtype=np.uint8)
 
+    image = white_background_array(image)
     if image.ndim == 2:
         gray = image
     elif image.shape[2] == 4:
@@ -543,6 +544,7 @@ def bridge_small_gaps(binary: np.ndarray, bridge_gap_px: int = 0) -> np.ndarray:
 
 
 def _resize_for_vectorization(image: np.ndarray, max_vectorize_dim: int) -> tuple[np.ndarray, float]:
+    image = white_background_array(image)
     if image is None or image.size == 0:
         return image, 1.0
     max_dim = max(image.shape[:2])
@@ -676,35 +678,6 @@ def _components_to_binary(components: list[dict], shape: tuple[int, int]) -> np.
     return output
 
 
-def _export_stroke_svg(curve_list: CurveList, path: str | Path, *, width: int, height: int) -> Path:
-    output = Path(path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    lines = [
-        '<?xml version="1.0" encoding="UTF-8"?>',
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
-        '<g fill="none" stroke="#000000" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">',
-    ]
-    for curve in curve_list.curves:
-        if len(curve.points) < 2:
-            continue
-        d = _curve_to_svg_path_d(curve)
-        if d:
-            lines.append(f'<path d="{d}" data-curve-id="{int(curve.curve_id)}" data-closed="{str(bool(curve.closed)).lower()}"/>')
-    lines.extend(['</g>', '</svg>'])
-    output.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return output
-
-
-def _curve_to_svg_path_d(curve: Curve2D) -> str:
-    points = _curve_points(curve)
-    if len(points) < 2:
-        return ""
-    parts = [f'M {points[0][0]:.3f} {points[0][1]:.3f}']
-    parts.extend(f'L {point[0]:.3f} {point[1]:.3f}' for point in points[1:])
-    if curve.closed:
-        parts.append('Z')
-    return " ".join(parts)
-
 def _image_min_curve_length_px(image: np.ndarray, min_curve_length_ratio: float) -> float:
     if image is None or image.size == 0:
         return 0.0
@@ -722,26 +695,50 @@ def _line_component_to_curves(
     smooth_iterations: int,
     force_single_path: bool,
 ) -> list[Curve]:
-    # Gap repair is performed once before component extraction. Closing each
-    # component again here can fuse closely spaced hatch lines into one graph.
-    skeleton = _thin_binary(mask > 0)
-    branch_count = _skeleton_branch_count(skeleton)
-    effective_min_path_length = max(int(min_path_length), int(np.ceil(min_curve_length_px)))
-    if _skeleton_is_cycle_like(skeleton):
-        paths = _skeleton_to_cycle_paths(skeleton, min_path_length=effective_min_path_length)
-    elif force_single_path or branch_count == 0:
-        paths = _skeleton_to_diameter_paths(skeleton, min_path_length=effective_min_path_length)
-        paths = [max(paths, key=len)] if paths else []
-    else:
-        paths = _skeleton_to_branch_paths(skeleton, min_path_length=effective_min_path_length)
-    curves: list[Curve] = []
+    from src.pipeline.vectorization.centerline import thin, trace, refine_network, join_continuations
+    from src.pipeline.vectorization.gaussian_bezier import fit_solid_stroke
+    # Thinning, unlike erosion, preserves the topology of thick ink strokes.
+    # Short edges that only exist to tie a junction together are kept; the
+    # length arguments remain part of the call contract and are not a filter.
+    del min_path_length, min_curve_length_px, force_single_path
+    skeleton = thin(mask)
+    paths = refine_network(trace(skeleton))
+    endpoint_counts: dict[tuple[float, float], int] = {}
+    closed_flags: list[bool] = []
     for path in paths:
+        closed = len(path) >= 3 and _same_skeleton_point(path[0], path[-1])
+        closed_flags.append(closed)
+        if not closed and len(path) >= 2:
+            for endpoint in (path[0], path[-1]):
+                key = _skeleton_point_key(endpoint)
+                endpoint_counts[key] = endpoint_counts.get(key, 0) + 1
+    curves = []
+    for path, closed in zip(paths, closed_flags):
+        if len(path) < 2:
+            continue
         points = [(float(x + offset[0]), float(y + offset[1])) for y, x in path]
-        points = _simplify_curve(points, simplify_epsilon)
-        points = _chaikin(points, iterations=smooth_iterations)
-        if len(points) >= 2 and _curve_length(points) >= min_curve_length_px:
-            curves.append(points)
-    return curves
+        fix_start = (not closed) and endpoint_counts.get(_skeleton_point_key(path[0]), 0) >= 2
+        fix_end = (not closed) and endpoint_counts.get(_skeleton_point_key(path[-1]), 0) >= 2
+        points = fit_solid_stroke(
+            points,
+            mask,
+            offset,
+            epsilon=simplify_epsilon,
+            smooth=smooth_iterations,
+            fix_start=fix_start,
+            fix_end=fix_end,
+        )
+        if len(points) >= 2:
+            curves.append([tuple(point) for point in points])
+    return join_continuations(curves)
+
+
+def _skeleton_point_key(point: Sequence) -> tuple[float, float]:
+    return (round(float(point[0]), 5), round(float(point[1]), 5))
+
+
+def _same_skeleton_point(first: Sequence, second: Sequence) -> bool:
+    return _skeleton_point_key(first) == _skeleton_point_key(second)
 
 
 def _area_component_to_curves(

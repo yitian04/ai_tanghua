@@ -13,7 +13,7 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from apps.gui.views import direct_curve_page, export_page, planning_page, robot_page, vector_page
-from apps.gui.views import composition_page, text_trajectory_page, svg_generation_page
+from apps.gui.views import composition_page, text_trajectory_page, svg_generation_page, shop_whitebox_page
 from apps.gui.asset_library import request as request_assets, show_pending
 from apps.gui import workspace
 from apps.gui.parameter_ui import parameter_scope,render_current_actions
@@ -225,6 +225,7 @@ def main() -> None:
     render_form_accessibility_patch()
     st.markdown('<div class="app-title">糖画机械臂控制系统</div>', unsafe_allow_html=True)
     pages = {
+        "理想小店（白盒）": shop_whitebox_page.render,
         "AI糖画线稿": direct_curve_page.render,
         "图像转曲线": vector_page.render,
         "AI SVG 曲线": svg_generation_page.render,

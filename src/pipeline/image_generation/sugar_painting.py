@@ -159,6 +159,7 @@ class SugarPaintingTask:
     line_art_attempts: list[dict[str, Any]] = field(default_factory=list)
     approved_for_sample_library: bool = False
     line_art_quality_overridden: bool = False
+    mode: str = "two_stage"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -189,6 +190,7 @@ class SugarPaintingService:
         object_name: str,
         *,
         prompt_language: str = "zh",
+        mode: str = "two_stage",
         sample_prompt_template: str | None = None,
         line_art_prompt_template: str | None = None,
     ) -> SugarPaintingTask:
@@ -225,6 +227,7 @@ class SugarPaintingService:
             sample_negative_prompt=default_sample_negative,
             line_art_negative_prompt=default_line_art_negative,
         )
+        task.mode = mode
         self.save(task)
         return task
 
@@ -395,7 +398,7 @@ class SugarPaintingService:
                 task.prompt_language,
                 override=task.sample_negative_prompt,
             )
-            if getattr(provider, "provider_id", "") in {"siliconflow", "bananapro"}
+            if getattr(provider, "provider_id", "") in {"siliconflow", "bananapro", "comfyui"}
             else options
         )
         base_prompt = compose_stage_prompt(task, "sample")
@@ -552,7 +555,7 @@ class SugarPaintingService:
                     task.prompt_language,
                     override=task.line_art_negative_prompt,
                 )
-                if getattr(provider, "provider_id", "") in {"siliconflow", "bananapro"}
+                if getattr(provider, "provider_id", "") in {"siliconflow", "bananapro", "comfyui"}
                 else options
             )
             if getattr(provider, "provider_id", "") == "bananapro":
@@ -579,6 +582,30 @@ class SugarPaintingService:
             raise RuntimeError("模型没有返回可用线稿。")
         task.line_art_image = str(best_result[0].output_path)
         task.line_art_quality = _quality_to_dict(best_result[1])
+        task.line_art_confirmed = False
+        task.line_art_quality_overridden = False
+        self.save(task)
+        return task
+
+    def generate_direct_line_art(
+        self, task: SugarPaintingTask, provider: ImageProvider, options: ImageRequestOptions,
+    ) -> SugarPaintingTask:
+        from src.pipeline.shop_creation import SDXL_LINE_NEGATIVE, image_prompt, sdxl_line_prompt
+        from .local_comfy import SDXL
+
+        if task.mode != "direct":
+            raise ValueError("请先建立直接线稿任务。")
+        attempt = len(task.line_art_attempts) + 1
+        output = self._image_dir(task.task_id) / f"lineart_a{attempt}.{options.output_format}"
+        prompt = image_prompt({}, task.object_name)
+        if getattr(provider, "provider_id", "") == "comfyui" and provider.generation_model == SDXL:
+            prompt = sdxl_line_prompt({}, task.object_name)
+            options = _with_extra_option(options, "negative_prompt", SDXL_LINE_NEGATIVE)
+        result = provider.generate(prompt, output, options)
+        quality = _quality_to_dict(evaluate_traceable_line_image(result.output_path))
+        task.line_art_attempts.append({**_attempt_record(attempt, result, prompt), "quality": quality})
+        task.line_art_image = str(result.output_path)
+        task.line_art_quality = quality
         task.line_art_confirmed = False
         task.line_art_quality_overridden = False
         self.save(task)

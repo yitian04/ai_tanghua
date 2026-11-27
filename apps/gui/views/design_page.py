@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from apps.gui.image_viewer import image_viewer, figure_viewer
+
 import os
 from pathlib import Path
 
@@ -213,7 +215,7 @@ def render_image_generation_page(config: dict, root_dir: str, *, title: str | No
         if latest and Path(latest).exists():
             st.markdown("#### " + T("\\u5f53\\u524d\\u8f93\\u5165\\u56fe\\u7247"))
             st.code(latest)
-            st.image(latest, width="stretch")
+            image_viewer(latest, width="stretch")
             _render_quality_report(st.session_state.get("latest_image_quality"))
         else:
             st.info(T("\\u751f\\u6210\\u6216\\u4e0a\\u4f20\\u56fe\\u7247\\u540e\\uff0c\\u4f1a\\u5728\\u8fd9\\u91cc\\u663e\\u793a\\uff0c\\u5e76\\u4f5c\\u4e3a\\u56fe\\u50cf\\u8f6c\\u66f2\\u7ebf\\u6a21\\u5757\\u7684\\u8f93\\u5165\\u3002"))

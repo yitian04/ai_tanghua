@@ -7,6 +7,7 @@ from typing import Any
 
 
 DEFAULT_STAGE_SELECTIONS: dict[str, dict[str, str]] = {
+    "direct": {"source": "comfyui", "provider_id": "comfyui", "model_id": "sd_xl_base_1.0.safetensors"},
     "sample": {
         "source": "siliconflow",
         "provider_id": "siliconflow",
@@ -140,6 +141,8 @@ class ProjectDefaultsStore:
 
 def _normalize_stage(stage: str) -> str:
     value = str(stage).strip().lower()
+    if value == "direct":
+        return value
     if value in {"sample", "stage1", "1"}:
         return "sample"
     if value in {"line_art", "lineart", "stage2", "2"}:

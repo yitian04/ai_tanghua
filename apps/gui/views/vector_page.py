@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from apps.gui.image_viewer import image_viewer, figure_viewer
+
 import hashlib
 from pathlib import Path
 
@@ -8,6 +10,7 @@ import numpy as np
 from apps.gui.parameter_ui import ui as st
 from apps.gui.asset_library import file_input, image_input
 from PIL import Image
+from src.core.image_pixels import white_background
 
 from apps.gui.views.file_naming import build_output_path, infer_prefix_from_path, sanitize_filename
 from apps.gui.plot_fonts import configure_matplotlib_chinese_font
@@ -45,8 +48,9 @@ def _plot_curves(
 ):
     configure_matplotlib_chinese_font()
     fig, ax = plt.subplots(figsize=(4.2, 3.4), dpi=110)
-    if show_source_image and image_path and Path(image_path).is_file():
-        image = Image.open(image_path).convert("RGB")
+    source_shown = bool(show_source_image and image_path and Path(image_path).is_file() and Path(image_path).suffix.lower() != '.svg')
+    if source_shown:
+        image = white_background(Image.open(image_path))
         ax.imshow(image, alpha=float(source_alpha))
         ax.set_xlim(0, image.width)
         ax.set_ylim(image.height, 0)
@@ -62,6 +66,8 @@ def _plot_curves(
         ax.scatter(xs[0], ys[0], s=6, marker="o", color=color)
 
     ax.set_aspect("equal", adjustable="box")
+    if not source_shown:
+        ax.invert_yaxis()
     ax.set_title("曲线预览", fontsize=9)
     ax.set_xlabel("图像 X 坐标 / 像素")
     ax.set_ylabel("图像 Y 坐标 / 像素")
@@ -83,9 +89,9 @@ def _render_curve_summary(
     frame_label = "图像像素坐标" if curve_list.coordinate_frame == "image_px" else curve_list.coordinate_frame
     col_c.metric("坐标系", frame_label)
 
-    source_svg = curve_list.metadata.get("stroke_svg_output_path") or curve_list.metadata.get("source_svg") or curve_list.metadata.get("svg_output_path")
+    source_svg = curve_list.metadata.get("source_svg")
     if source_svg:
-        st.caption(f"SVG: {source_svg}")
+        st.caption(f"SVG 源图：{source_svg}")
 
     rows = [
         {
@@ -105,7 +111,7 @@ def _render_curve_summary(
             show_source_image=show_source_image,
             source_alpha=source_alpha,
         )
-        st.pyplot(fig, width="content")
+        figure_viewer(fig, width="content")
         plt.close(fig)
     with table_col:
         st.dataframe(rows, width="stretch", hide_index=True, height=230)
@@ -113,8 +119,13 @@ def _render_curve_summary(
 
 def _render_binary_preview(preview: np.ndarray, analysis: dict) -> None:
     st.markdown("#### 二值化与分类预览")
-    st.image(Image.fromarray(preview), width="stretch")
+    image_viewer(Image.fromarray(preview), width="stretch")
     if analysis.get("input_mode") == "line_only":
+        if st.checkbox('查看细化后的中心线', value=False, key='vector_show_thinning'):
+            from src.pipeline.vectorization.centerline import thin
+            skeleton = thin(preview[:, :, 0] < 128)
+            image_viewer(Image.fromarray(np.where(skeleton, 0, 255).astype(np.uint8)), width='stretch')
+            st.caption('单像素细化预览：用于检查连接关系；不改变原图，也不会扩张连接相邻线条。')
         st.caption(
             f"连通区域={analysis['component_count']}；全部按线条处理；"
             f"90%分位线宽={float(analysis['p90_stroke_width_px']):.1f}像素。"
@@ -182,7 +193,7 @@ def _ensure_binary_preview(
     if not source.is_file():
         return False
 
-    image = Image.open(source).convert("RGB")
+    image = white_background(Image.open(source))
     preview, analysis = create_binary_preview(
         np.array(image),
         threshold_method=threshold_method,  # type: ignore[arg-type]
@@ -220,17 +231,52 @@ def _method_available(method: str, outline_engine: str, tools: dict[str, str | N
     return False, "未找到 VTracer/Potrace。请将可执行文件放入 tools/VTracer/ 或 tools/Potrace/。"
 
 
+def _render_svg_input(root_dir: str, source: str, control_col, result_col) -> None:
+    from src.modules.svg_import_module import svg_to_curves
+    with control_col:
+        st.info('直接读取 SVG 路径，不进行二值化或重新提取骨架。实心轮廓不会自动变成中心线。')
+        tolerance = st.number_input('SVG 曲线采样间距（源坐标单位）', min_value=0.2, max_value=20.0, value=1.2, step=0.2)
+        signature = (source, Path(source).stat().st_mtime_ns, tolerance) if Path(source).is_file() else None
+        curves = None
+        try:
+            if signature is None:
+                raise ValueError('SVG 源文件不存在，请重新选择。')
+            if st.session_state.get('vector_svg_signature') != signature:
+                st.session_state['vector_svg_preview'] = svg_to_curves(source, tolerance)
+                st.session_state['vector_svg_signature'] = signature
+            curves = st.session_state['vector_svg_preview']
+        except Exception as exc:
+            st.error(f'SVG 转换失败：{exc}')
+        generate = st.button('生成曲线', type='primary', disabled=curves is None, width='stretch')
+    with result_col:
+        if curves is not None:
+            st.caption('SVG 路径采样预览；确认后仅输出曲线 JSON。')
+            _render_curve_summary(curves, show_source_image=False)
+    if generate and curves is not None:
+        prefix = sanitize_filename(st.session_state.get('job_name') or infer_prefix_from_path(source, 'svg'), 'svg')
+        output = build_output_path(root_dir, 'curves', prefix, 'curves', 'json')
+        export_curves_json(curves, output)
+        st.session_state['latest_curves_path'] = str(output)
+        st.session_state['job_name'] = prefix
+        with result_col:
+            st.success(f'曲线文件已输出：{output}')
+
+
 def render(config: dict, root_dir: str) -> None:
     del config
     st.subheader("图像转曲线")
-    st.caption("上传或选择图像，生成 CurveList JSON，并可选输出仅含笔画的 SVG。本页面不会连接机械臂。")
+    st.caption("上传或选择图片 / SVG 源图，统一生成曲线 JSON。本页面不会连接机械臂。")
 
     generated_this_run = False
     tools = available_vectorization_tools()
     control_col, result_col = st.columns([0.85, 1.65])
 
     with control_col:
-        image_path = file_input(root_dir, "vector", "图像输入", {"image"}, candidate=st.session_state.get("latest_image_path"))
+        image_path = file_input(root_dir, "vector", "图像 / SVG 输入", {"image", "svg"}, candidate=st.session_state.get("latest_image_path"))
+    if image_path and Path(image_path).suffix.lower() == '.svg':
+        _render_svg_input(root_dir, image_path, control_col, result_col)
+        return
+    with control_col:
         if image_path:
             st.session_state["vector_image_path"] = image_path
             st.session_state["latest_image_path"] = image_path
@@ -258,6 +304,7 @@ def render(config: dict, root_dir: str) -> None:
         else:
             st.warning(status_text)
         if vectorizer == "skeleton_stroke_svg":
+            st.caption("先将粗线拓扑细化为单像素中心线，再逐边提取；保留交叉连接并进行直线校正和轻度曲线平滑。")
             st.info("当前模式会把全部有效黑色区域视为线条并提取中心骨架，不执行面域轮廓处理。")
 
         threshold_label = st.selectbox("二值化方式", list(THRESHOLD_LABELS.keys()), index=0)
@@ -295,9 +342,10 @@ def render(config: dict, root_dir: str) -> None:
             max_value=10.0,
             value=0.3,
             step=0.1,
-            help="降低默认过滤比例，保留构成规则排线的短线。",
+            help="骨架模式保留交叉点之间的短连接，不应用短曲线过滤；此参数仅用于其他模式。",
+            disabled=vectorizer == "skeleton_stroke_svg",
         )
-        max_vectorize_dim = st.number_input("处理图像最大边长", min_value=256, max_value=4096, value=1024, step=128)
+        max_vectorize_dim = st.number_input("处理图像最大边长", min_value=256, max_value=4096, value=2048, step=128)
 
         with st.expander("骨架提取高级参数", expanded=vectorizer in {"mixed_stroke_svg", "skeleton_stroke_svg"}):
             if vectorizer in {"mixed_stroke_svg", "outline_svg"}:
@@ -339,7 +387,7 @@ def render(config: dict, root_dir: str) -> None:
 
     with result_col:
         if not image_path:
-            st.info("请本地上传图像，或从素材库选择并确认。")
+            st.info("请本地上传图片或 SVG 源图，或从素材库选择并确认。")
         elif binary_ready:
             _render_binary_preview(st.session_state["vector_binary_preview"], st.session_state["vector_binary_analysis"])
 
@@ -353,11 +401,10 @@ def render(config: dict, root_dir: str) -> None:
             st.error("图像路径不存在，或该路径不是文件。")
             return
 
-        image = Image.open(source).convert("RGB")
+        image = white_background(Image.open(source))
         prefix = sanitize_filename(st.session_state.get("job_name") or infer_prefix_from_path(str(source), "image"), "image")
         st.session_state["job_name"] = prefix
         output = build_output_path(root_dir, "curves", prefix, "curves", "json")
-        svg_output = build_output_path(root_dir, "curves", prefix, "strokes", "svg") if vectorizer in {"mixed_stroke_svg", "skeleton_stroke_svg", "outline_svg"} else None
         progress = st.progress(0, text="开始生成曲线")
 
         def update_progress(value: float, text: str) -> None:
@@ -383,7 +430,6 @@ def render(config: dict, root_dir: str) -> None:
                 source_image=str(source),
                 vectorizer=vectorizer,  # type: ignore[arg-type]
                 outline_engine=outline_engine,  # type: ignore[arg-type]
-                svg_output_path=svg_output,
                 work_dir=None,
                 progress_callback=update_progress,
             )

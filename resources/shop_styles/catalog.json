@@ -1,0 +1,116 @@
+[
+  {
+    "number": "FB-036",
+    "group": "FB 经典绘本叙事 / Picture Book & Watercolor",
+    "reference": "Liz Climo",
+    "generation_name": "Liz Climo Minimal Animal Cartoon Storybook",
+    "traits": "参考绘本作者Liz Climo",
+    "id": "rounded",
+    "label": "圆润轮廓",
+    "themes": [
+      "一杯热咖啡与一只牛角面包，杯口伸出两条连续热气曲线。",
+      "三个高低不同的蘑菇与两片大叶子。",
+      "一只小兔坐在一朵大花旁。"
+    ],
+    "candidate_reference": "resources/shop_styles/FB-036.webp",
+    "line_language": "Rounded broad contours, gentle arcs and simple compact proportions.",
+    "version": 2,
+    "reference_policy": "Use only the user supplied line-density reference; numbered artwork is not passed to generation.",
+    "legacy_library_id": "FB-036"
+  },
+  {
+    "number": "FA-001",
+    "group": "FA 国际社论幽默 / Editorial & Humor Doodle",
+    "reference": "Gemma Correll",
+    "generation_name": "Playful Deadpan Doodle",
+    "traits": "松散黑线、怪萌人物、少量点色、白底、日常吐槽与尴尬幽默；人物轮廓优先于细节堆砌，脸型、头身比例与手脚形状要形成清楚而独立的视觉语言；表情偏冷脸、尴尬或突然夸张，姿态要有明确喜剧节奏，避免统一的可爱微笑。",
+    "id": "geometric",
+    "label": "几何折线",
+    "themes": [
+      "圆形太阳、三角形山峰与一道平缓河流。",
+      "帆船由一个三角帆和一个弧形船身组成，水面只有两条波纹。",
+      "三个高低错落的几何花瓶，各插一枝简化花朵。"
+    ],
+    "candidate_reference": "resources/shop_styles/FA-001.webp",
+    "line_language": "Large circles, triangles and clean straight segments; simplify each subject to a few geometric contours.",
+    "version": 2,
+    "reference_policy": "Use only the user supplied line-density reference; numbered artwork is not passed to generation.",
+    "legacy_library_id": "FA-001"
+  },
+  {
+    "number": "FB-013",
+    "group": "FB 经典绘本叙事 / Picture Book & Watercolor",
+    "reference": "Carson Ellis",
+    "generation_name": "Folk-Line Decorative Storybook",
+    "traits": "民俗线描、复古配色、植物纹样、奇异群像；人物轮廓优先于细节堆砌，脸型、头身比例与手脚形状要形成清楚而独立的视觉语言；表情与肢体动作要服从该风格的人格机制，避免回落为统一的标准Q版表情。",
+    "id": "flowing",
+    "label": "舒展流线",
+    "themes": [
+      "一条舒展的海浪托起一片小帆。",
+      "一枝木兰横向舒展，只有三朵大花和四片叶子。",
+      "飘带与一朵大云随风向右舒展。"
+    ],
+    "candidate_reference": "resources/shop_styles/FB-013.webp",
+    "line_language": "Long sweeping connected curves, flowing direction and few changes of curvature.",
+    "version": 2,
+    "reference_policy": "Use only the user supplied line-density reference; numbered artwork is not passed to generation.",
+    "legacy_library_id": "FB-013"
+  },
+  {
+    "number": "FC-008",
+    "group": "FC 现代平面艺术 / Modern Graphic & Pop",
+    "reference": "Charley Harper",
+    "generation_name": "Ultra-Geometric Nature Character",
+    "traits": "极端几何化动物与人物、Flat Shape、装饰性强。",
+    "id": "symmetric",
+    "label": "对称纹样",
+    "themes": [
+      "左右各一枝大叶片，围绕中央一朵花对称展开。",
+      "两条对称水波之间升起一轮太阳。",
+      "一只张开翅膀的蝴蝶，左右各一朵大花。"
+    ],
+    "candidate_reference": "resources/shop_styles/FC-008.webp",
+    "line_language": "A few broad mirrored contours with an open center; use only a small number of repeated elements.",
+    "version": 2,
+    "reference_policy": "Use only the user supplied line-density reference; numbered artwork is not passed to generation.",
+    "legacy_library_id": "FC-008"
+  },
+  {
+    "number": "FC-015",
+    "group": "FC 现代平面艺术 / Modern Graphic & Pop",
+    "reference": "Jean Cocteau line drawing",
+    "generation_name": "Poetic Single-Line Figure",
+    "traits": "单线脸、不断笔、极少细节、优雅诗性。",
+    "id": "naive",
+    "label": "稚拙造型",
+    "themes": [
+      "一把大雨伞旁放着两只圆头雨靴。",
+      "一座小山托着比山还大的云朵和太阳。",
+      "一颗大草莓和两颗圆樱桃并排摆放。"
+    ],
+    "candidate_reference": "resources/shop_styles/FC-015.webp",
+    "line_language": "Playful exaggerated proportions with deliberate smooth simple contours, never scratchy or wobbly marks.",
+    "version": 2,
+    "reference_policy": "Use only the user supplied line-density reference; numbered artwork is not passed to generation.",
+    "legacy_library_id": "FC-015"
+  },
+  {
+    "number": "FB-062",
+    "group": "FB 经典绘本叙事 / Picture Book & Watercolor",
+    "reference": "Violeta Lópiz",
+    "generation_name": "Violeta Lopiz Poetic Minimal Ink & Botanical Storybook",
+    "traits": "参考绘本作者Violeta Lopiz",
+    "id": "spacious",
+    "label": "留白构景",
+    "themes": [
+      "一座平缓小山、一朵大云和半露的太阳组成疏朗横幅。",
+      "一片荷叶、一朵莲花和一道长水纹。",
+      "一弯月亮照着一枝横向舒展的树枝。"
+    ],
+    "candidate_reference": "resources/shop_styles/FB-062.webp",
+    "line_language": "Few large silhouettes described only by hollow outlines, asymmetrical balance and spacious negative space.",
+    "version": 2,
+    "reference_policy": "Use only the user supplied line-density reference; numbered artwork is not passed to generation.",
+    "legacy_library_id": "FB-062"
+  }
+]

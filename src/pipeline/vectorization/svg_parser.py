@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterable
 
 from src.core.models import Curve2D, CurveList
+from .svg_styles import normalize_styles
 
 
 Point = tuple[float, float]
@@ -26,7 +27,7 @@ def parse_svg_to_curve_list(
     metadata: dict | None = None,
 ) -> CurveList:
     path = Path(svg_path)
-    root = ET.parse(path).getroot()
+    root = normalize_styles(ET.parse(path).getroot())
     curves: list[Curve2D] = []
     _collect_curves(
         root,
@@ -71,7 +72,7 @@ def _collect_curves(
     elif tag == "line":
         produced = [(_line_points(element), False)]
     elif tag == "rect":
-        produced = [(_rect_points(element), True)]
+        produced = [(_rect_points(element, sample_tolerance_px), True)]
     elif tag == "circle":
         produced = [(_ellipse_points(element, circle=True), True)]
     elif tag == "ellipse":
@@ -234,8 +235,8 @@ def _parse_path_d(d: str, sample_tolerance_px: float) -> list[tuple[list[Point],
                 _large_arc = read_number()
                 _sweep = read_number()
                 end = read_point(relative)
-                # CLI tracers normally emit cubic paths. Arc fallback keeps geometry connected.
-                append_point(end)
+                for point in _sample_arc(current, end, _rx, _ry, _rotation, bool(_large_arc), bool(_sweep), sample_tolerance_px)[1:]:
+                    append_point(point)
                 current = end
             last_cubic_control = None
             last_quad_control = None
@@ -252,6 +253,39 @@ def _parse_path_d(d: str, sample_tolerance_px: float) -> list[tuple[list[Point],
 
     finish_path(False)
     return paths
+
+
+def _sample_arc(start: Point, end: Point, rx: float, ry: float, rotation: float,
+                large: bool, sweep: bool, tolerance: float) -> list[Point]:
+    rx, ry = abs(rx), abs(ry)
+    if rx == 0 or ry == 0 or start == end:
+        return [start, end]
+    phi = math.radians(rotation % 360)
+    c, s = math.cos(phi), math.sin(phi)
+    dx, dy = (start[0]-end[0])/2, (start[1]-end[1])/2
+    x, y = c*dx+s*dy, -s*dx+c*dy
+    scale = x*x/(rx*rx)+y*y/(ry*ry)
+    if scale > 1:
+        rx *= math.sqrt(scale); ry *= math.sqrt(scale)
+    denominator = rx*rx*y*y+ry*ry*x*x
+    factor = math.sqrt(max(0., (rx*rx*ry*ry-denominator)/denominator))
+    if large == sweep:factor = -factor
+    cx, cy = factor*rx*y/ry, -factor*ry*x/rx
+    center = (c*cx-s*cy+(start[0]+end[0])/2, s*cx+c*cy+(start[1]+end[1])/2)
+    ux, uy = (x-cx)/rx, (y-cy)/ry
+    vx, vy = (-x-cx)/rx, (-y-cy)/ry
+    theta = math.atan2(uy, ux)
+    delta = math.atan2(ux*vy-uy*vx, ux*vx+uy*vy)
+    if sweep and delta < 0:delta += 2*math.pi
+    if not sweep and delta > 0:delta -= 2*math.pi
+    count = max(4, min(4096, math.ceil(abs(delta)*max(rx, ry)/tolerance)))
+    points = []
+    for i in range(count+1):
+        angle = theta+delta*i/count
+        ex, ey = rx*math.cos(angle), ry*math.sin(angle)
+        points.append((center[0]+c*ex-s*ey, center[1]+s*ex+c*ey))
+    points[0], points[-1] = start, end
+    return points
 
 
 def _sample_cubic(p0: Point, p1: Point, p2: Point, p3: Point, tolerance: float) -> list[Point]:
@@ -337,11 +371,22 @@ def _line_points(element: ET.Element) -> list[Point]:
     return [(_attr_float(element, "x1"), _attr_float(element, "y1")), (_attr_float(element, "x2"), _attr_float(element, "y2"))]
 
 
-def _rect_points(element: ET.Element) -> list[Point]:
+def _rect_points(element: ET.Element, tolerance: float = 2.0) -> list[Point]:
     x = _attr_float(element, "x")
     y = _attr_float(element, "y")
     width = _attr_float(element, "width")
     height = _attr_float(element, "height")
+    rx = min(width/2, max(0., _attr_float(element, 'rx', _attr_float(element, 'ry'))))
+    ry = min(height/2, max(0., _attr_float(element, 'ry', rx)))
+    if rx > 0 and ry > 0:
+        points = [(x+rx,y),(x+width-rx,y)]
+        for end, following in [((x+width,y+ry),(x+width,y+height-ry)),
+                               ((x+width-rx,y+height),(x+rx,y+height)),
+                               ((x,y+height-ry),(x,y+ry)),
+                               ((x+rx,y),(x+rx,y))]:
+            points.extend(_sample_arc(points[-1],end,rx,ry,0,False,True,tolerance)[1:])
+            if following != points[-1]:points.append(following)
+        return points
     return [(x, y), (x + width, y), (x + width, y + height), (x, y + height), (x, y)]
 
 

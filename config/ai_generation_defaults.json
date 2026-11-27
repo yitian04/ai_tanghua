@@ -4,7 +4,7 @@
     "sample": {
       "source": "bananapro",
       "provider_id": "bananapro",
-      "model_id": "nano-banana-pro"
+      "model_id": "gpt-image-2"
     },
     "line_art": {
       "source": "bananapro",

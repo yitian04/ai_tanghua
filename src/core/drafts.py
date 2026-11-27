@@ -57,7 +57,9 @@ class DraftStore:
             planned=[]
             for artifact in draft.artifacts:
                 folder=artifact.folder
-                if folder not in {'images','curves','trajectories','text_trajectories','compositions','exports'}:folder={'image':'images','curve':'curves','svg':'curves','trajectory':'trajectories','project':'compositions','gcode':'exports','program':'exports'}[classify(artifact.payload,artifact.name)]
+                kind=classify(artifact.payload,artifact.name)
+                if kind=='svg':folder='images'
+                elif folder not in {'images','curves','trajectories','text_trajectories','compositions','exports'}:folder={'image':'images','curve':'curves','trajectory':'trajectories','project':'compositions','gcode':'exports','program':'exports'}[kind]
                 target=self.library.path(Path('data')/folder/Path(artifact.name).name)
                 while target.exists() or target in planned:target=target.with_name(f'{target.stem}_{uuid.uuid4().hex[:8]}{target.suffix}')
                 planned.append(target)

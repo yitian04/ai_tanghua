@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from apps.gui.image_viewer import image_viewer, figure_viewer
+
 import os
 import time
 from pathlib import Path
+from contextlib import contextmanager
 from typing import Any
 
 from apps.gui.parameter_ui import ui as st
@@ -30,12 +33,15 @@ from src.pipeline.image_generation import (
     subject_instruction_for,
 )
 
+from src.pipeline.image_generation.local_comfy import LABEL as LOCAL_SOURCE, LocalImageProvider, LocalSettings
+
 
 PI_SOURCE = "Pi 模型中心（订阅 / OAuth / API Key）"
 SILICONFLOW_SOURCE = "硅基流动（中国大陆 API）"
 BANANAPRO_SOURCE = "BananaPro（多模型 API）"
 COMPATIBLE_SOURCE = "自定义兼容 API"
 SOURCE_LABELS = {
+    "comfyui": LOCAL_SOURCE,
     "siliconflow": SILICONFLOW_SOURCE,
     "bananapro": BANANAPRO_SOURCE,
     "pi": PI_SOURCE,
@@ -69,7 +75,24 @@ def render(config: dict, root_dir: str) -> None:
     task = _load_current_task(service)
 
     st.subheader("AI 糖画样图与线稿")
-    st.caption("先确认糖画样图，再基于同一张图提取黑白线稿。只有通过检查并确认的线稿才能进入曲线流程。")
+    direct = st.radio(
+        "生成方式", ["两阶段", "直接线稿"], horizontal=True,
+        index=int(bool(task and task.mode == "direct")), key="ai_sugar_mode",
+    ) == "直接线稿"
+    if direct:
+        st.caption("输入主体，直接生成黑白线稿。确认后可进入曲线处理。")
+        provider, ready, _, options, _, _, _ = _render_model_settings(service, root_dir, stage=3)
+        task = _render_task_controls(service, task if task and task.mode == "direct" else None, mode="direct")
+        if task:
+            _render_line_art_controls(service, task, provider, ready, False, options, False)
+            if task.line_art_image:
+                image_viewer(task.line_art_image, width="stretch")
+                _render_quality(task.line_art_quality)
+            _render_task_history(task)
+        return
+    if task and task.mode == "direct":
+        task = None
+    st.caption("先确认糖画样图，再从同一张图提取单中心线。")
     _render_step_status(task)
     default_stage = "第二阶段 · 提取单中心线" if task and task.sample_confirmed else "第一阶段 · 生成糖画"
     stage_label = st.segmented_control(
@@ -84,6 +107,8 @@ def render(config: dict, root_dir: str) -> None:
         _render_stage_one_page(service, task, root_dir)
     else:
         _render_stage_two_page(service, task, root_dir)
+    if task:
+        _render_task_history(task)
 
 
 def _render_stage_one_page(
@@ -158,6 +183,28 @@ def _render_step_status(task: SugarPaintingTask | None) -> None:
     st.divider()
 
 
+@contextmanager
+def _generation_progress(provider, message):
+    if not isinstance(provider, LocalImageProvider):
+        with st.spinner(message):
+            yield
+        return
+    status = st.empty()
+    started = time.monotonic()
+    status.info("正在提交本地任务……")
+
+    def update(event, details):
+        elapsed = int(time.monotonic() - started)
+        status.info(f"已提交本地任务，等待模型输出 · {elapsed} 秒")
+
+    provider.progress_callback = update
+    try:
+        yield
+    finally:
+        provider.progress_callback = None
+        status.empty()
+
+
 def _render_model_settings(
     service: SugarPaintingService,
     root_dir: str,
@@ -168,15 +215,15 @@ def _render_model_settings(
     model_ready = False
     supports_reference = False
     project_store = ProjectDefaultsStore(root_dir)
-    stage_key = "sample" if stage == 1 else "line_art"
+    stage_key = {1: "sample", 2: "line_art", 3: "direct"}[stage]
     project_default = project_store.stage(stage_key)
 
-    stage_name = "第一阶段" if stage == 1 else "第二阶段"
+    stage_name = {1: "第一阶段", 2: "第二阶段", 3: "直接线稿"}[stage]
     with st.expander(f"{stage_name}模型配置", expanded=False):
         sources = (
-            [SILICONFLOW_SOURCE, BANANAPRO_SOURCE, PI_SOURCE, COMPATIBLE_SOURCE]
+            [SILICONFLOW_SOURCE, BANANAPRO_SOURCE, PI_SOURCE, COMPATIBLE_SOURCE, LOCAL_SOURCE]
             if stage == 1
-            else [BANANAPRO_SOURCE, SILICONFLOW_SOURCE, PI_SOURCE, COMPATIBLE_SOURCE]
+            else [BANANAPRO_SOURCE, SILICONFLOW_SOURCE, PI_SOURCE, COMPATIBLE_SOURCE, LOCAL_SOURCE]
         )
         default_source = SOURCE_LABELS.get(project_default["source"], sources[0])
         source = st.selectbox(
@@ -189,7 +236,44 @@ def _render_model_settings(
 
         selected_generation_model = ""
         provider_options: dict[str, Any] = {}
-        if source == SILICONFLOW_SOURCE:
+        if source == LOCAL_SOURCE:
+            settings = LocalSettings.load(root_dir)
+            with st.expander("本机高级设置"):
+                profiles = {"已安装的 SDXL / Flux Kontext": "installed", "FLUX.2 Klein 4B FP8": "klein"}
+                selected_profile = st.selectbox(
+                    "本地模型组合", list(profiles), index=int(settings.profile == "klein"),
+                    key=f"comfy_profile_{stage}",
+                )
+                settings.profile = profiles[selected_profile]
+                settings.installation = st.text_input(
+                    "ComfyUI 安装目录", value=settings.installation, key=f"comfy_home_{stage}",
+                )
+                settings.timeout_s = int(st.number_input(
+                    "等待上限（秒）", min_value=60, max_value=1800,
+                    value=settings.timeout_s, step=30, key=f"comfy_timeout_{stage}",
+                ))
+                if st.button("保存本机配置", key=f"comfy_save_{stage}"):
+                    settings.save(root_dir)
+                    st.success("已保存本机配置。")
+            image_provider = LocalImageProvider(settings)
+            selected_generation_model = image_provider.edit_model if stage == 2 else image_provider.generation_model
+            supports_reference = stage != 3
+            st.caption(f"预置模型：{selected_generation_model}")
+            if stage == 1 and image_provider.edit_model != selected_generation_model:
+                st.caption(f"使用参考图时会调用 {image_provider.edit_model}。")
+            if st.button("启动本地服务", key=f"comfy_start_{stage}"):
+                try:
+                    if not image_provider.is_running():
+                        settings.start(root_dir)
+                    st.info("服务启动后可检查连接。")
+                except OSError as exc:
+                    st.error(f"启动失败：{exc}")
+            if st.button("检查连接与模型", key=f"comfy_check_{stage}"):
+                model_ready, detail = image_provider.test_connection(edit=stage == 2)
+                (st.success if model_ready else st.error)(detail)
+            # Do not prevent retries after a service restarts or is launched externally.
+            model_ready = True
+        elif source == SILICONFLOW_SOURCE:
             image_provider, model_ready, supports_reference, selected_generation_model = (
                 _render_siliconflow_provider(
                     root_dir,
@@ -258,13 +342,15 @@ def _render_model_settings(
             and project_default["model_id"] == selected_generation_model
         )
         if st.button(
-            "保存为项目默认模型",
+            "保存本地来源" if source == LOCAL_SOURCE else "保存为项目默认模型",
             width="stretch",
             disabled=not bool(selected_provider_id and selected_generation_model),
             key=f"save_project_model_default_stage_{stage}",
             help="只保存服务商和模型 ID 到 config，不保存 API Key。该配置可以提交到 GitHub。",
         ):
             try:
+                if isinstance(image_provider, LocalImageProvider):
+                    image_provider.settings.save(root_dir)
                 project_store.save_stage(
                     stage_key,
                     source=source_id,
@@ -274,12 +360,16 @@ def _render_model_settings(
             except Exception as exc:
                 st.error(f"默认模型保存失败：{exc}")
             else:
-                st.success("已保存为项目默认模型；该设置可以随代码上传 GitHub。")
+                st.success("已保存本地来源。" if source == LOCAL_SOURCE else "已保存为项目默认模型。")
         elif default_matches:
             st.caption("当前选择是项目默认模型。")
 
         st.markdown("**运行选项**")
-        if stage == 2 or source in {PI_SOURCE, BANANAPRO_SOURCE}:
+        if source == LOCAL_SOURCE:
+            ratio = st.selectbox("画面比例", ["横幅 16:9", "方形 1:1"], key=f"comfy_size_{stage}")
+            size = "1536x864" if ratio == "横幅 16:9" else "1024x1024"
+            quality = "medium"
+        elif stage == 2 or source in {PI_SOURCE, BANANAPRO_SOURCE}:
             size, quality = "1024x1024", "medium"
             if source == PI_SOURCE:
                 st.caption("Pi 会按所选模型的原生能力决定输出尺寸与质量。")
@@ -317,7 +407,7 @@ def _render_model_settings(
                     st.warning("所选模型不支持参考图输入，请关闭参考样本或更换模型。")
             elif not approved_samples:
                 st.caption("样本库为空；只有主动批准的线稿才会进入样本库。")
-        else:
+        elif stage == 2:
             auto_retry_once = st.checkbox(
                 "质量未通过时自动修复一次",
                 value=True,
@@ -327,11 +417,7 @@ def _render_model_settings(
             if bool(getattr(image_provider, "requires_public_reference_image", False)):
                 image_host = _render_public_image_host(root_dir)
 
-    return (
-        image_provider,
-        model_ready,
-        supports_reference,
-        ImageRequestOptions(
+    request_options = ImageRequestOptions(
             size=size,
             quality=quality,
             extra_body=(
@@ -342,7 +428,15 @@ def _render_model_settings(
                 if source == SILICONFLOW_SOURCE
                 else provider_options
             ),
-        ),
+        )
+    if stage == 1 and image_provider is not None:
+        # Keep the actual selection when Streamlit cleans up off-page widgets.
+        st.session_state['shared_sample_image_runtime'] = (image_provider, request_options, supports_reference)
+    return (
+        image_provider,
+        model_ready,
+        supports_reference,
+        request_options,
         auto_retry_once,
         reference_image,
         image_host,
@@ -1060,29 +1154,32 @@ def _render_compatible_provider(
 def _render_task_controls(
     service: SugarPaintingService,
     task: SugarPaintingTask | None,
+    *, mode: str = "two_stage",
 ) -> SugarPaintingTask | None:
     st.markdown("#### 新建生成任务")
     current_language = task.prompt_language if task else "zh"
-    language_label = st.radio(
-        "提示词语言",
-        ["中文", "English"],
-        index=1 if current_language == "en" else 0,
-        horizontal=True,
-        key="ai_sugar_prompt_language",
-        help="切换后，样图提示词和线稿提示词会同时更新。",
-    )
-    prompt_language = "en" if language_label == "English" else "zh"
+    prompt_language = current_language
+    if mode == "two_stage":
+        language_label = st.radio(
+            "提示词语言",
+            ["中文", "English"],
+            index=1 if current_language == "en" else 0,
+            horizontal=True,
+            key="ai_sugar_prompt_language",
+            help="切换后，样图提示词和线稿提示词会同时更新。",
+        )
+        prompt_language = "en" if language_label == "English" else "zh"
     if task is not None and prompt_language != task.prompt_language:
         task = service.set_prompt_language(task, prompt_language)
     object_name = st.text_input(
         "主体名称",
         value=task.object_name if task else "",
-        placeholder="例如：马、兔子、龙",
-        help="第一轮建议只输入一个主体，不添加文字或复杂背景。",
+        placeholder="例如：一杯热咖啡与一只牛角面包" if mode == "direct" else "例如：马、兔子、龙",
+        help="描述主体与关键形状，尽量减少背景细节。",
     )
     if st.button("新建任务", type="primary", width="stretch", disabled=not object_name.strip()):
         try:
-            task = service.create_task(object_name, prompt_language=prompt_language)
+            task = service.create_task(object_name, prompt_language=prompt_language, mode=mode)
         except Exception as exc:
             st.error(str(exc))
         else:
@@ -1126,7 +1223,7 @@ def _render_sample_controls(
             st.error("模型配置不完整。")
         else:
             try:
-                with st.spinner("正在通过已连接模型生成糖画样图……"):
+                with _generation_progress(image_provider, "正在生成糖画样图……"):
                     task = service.generate_sample(
                         task,
                         image_provider,
@@ -1207,7 +1304,9 @@ def _render_prompt_editor(
                 height=120,
                 key=f"negative_prompt_{stage}_{task.task_id}_{task.prompt_language}",
             )
-            if negative_mode == "native":
+            if isinstance(image_provider, LocalImageProvider):
+                st.caption("SDXL 使用独立反向提示词。Flux 将其追加到主提示词。")
+            elif negative_mode == "native":
                 st.caption("当前适配器会把反向提示词作为独立参数发送；具体效果仍取决于所选模型。")
             elif negative_mode == "prompt_suffix":
                 st.caption("当前适配器没有独立反向参数，会把非空内容追加到主提示词中；留空则不追加。")
@@ -1355,55 +1454,59 @@ def _render_line_art_controls(
     image_host: Any | None = None,
 ) -> SugarPaintingTask:
     st.divider()
-    st.markdown("#### 阶段二：黑白线稿")
-    _render_prompt_editor(
-        service,
-        task,
-        stage="line_art",
-        image_provider=image_provider,
-    )
+    direct = task.mode == "direct"
+    st.markdown("#### 直接生成黑白线稿" if direct else "#### 阶段二：黑白线稿")
+    if not direct:
+        _render_prompt_editor(
+            service,
+            task,
+            stage="line_art",
+            image_provider=image_provider,
+        )
 
-    if getattr(image_provider, "provider_id", "") == "bananapro":
-        _render_bananapro_recovery(service, task, image_provider, options)
+        if getattr(image_provider, "provider_id", "") == "bananapro":
+            _render_bananapro_recovery(service, task, image_provider, options)
 
-    with st.expander("测试入口：上传黑白线稿", expanded=False):
-        st.caption("跳过 AI 线稿提取，直接上传本地线稿进行质量检查和转曲线测试。")
-        uploaded_line_art = image_input(service.root_dir, f"line_art_{task.task_id}", "黑白线稿")
-        if st.button(
-            "使用上传图片作为线稿",
-            width="stretch",
-            disabled=uploaded_line_art is None,
-            key=f"ai_import_line_art_{task.task_id}",
-        ):
-            try:
-                task = service.import_line_art(
-                    task,
-                    uploaded_line_art.getvalue(),
-                    uploaded_line_art.name,
-                )
-            except Exception as exc:
-                st.error(f"线稿上传失败：{exc}")
-            else:
-                st.success("线稿已上传并完成质量检查。")
-                st.rerun()
+        with st.expander("测试入口：上传黑白线稿", expanded=False):
+            st.caption("跳过 AI 线稿提取，直接上传本地线稿进行质量检查和转曲线测试。")
+            uploaded_line_art = image_input(service.root_dir, f"line_art_{task.task_id}", "黑白线稿")
+            if st.button(
+                "使用上传图片作为线稿",
+                width="stretch",
+                disabled=uploaded_line_art is None,
+                key=f"ai_import_line_art_{task.task_id}",
+            ):
+                try:
+                    task = service.import_line_art(
+                        task,
+                        uploaded_line_art.getvalue(),
+                        uploaded_line_art.name,
+                    )
+                except Exception as exc:
+                    st.error(f"线稿上传失败：{exc}")
+                else:
+                    st.success("线稿已上传并完成质量检查。")
+                    st.rerun()
 
-    if not supports_reference:
+    if not direct and not supports_reference:
         st.warning("所选模型不支持图片输入，无法根据已确认样图提取线稿；请更换支持参考图的模型。")
     elif not model_ready:
         st.info("请先连接所选模型服务商。")
     button_label = "重新提取线稿" if task.line_art_image else "从确认样图提取线稿"
+    if direct:
+        button_label = "重新生成线稿" if task.line_art_image else "生成黑白线稿"
     if st.button(
         button_label,
         type="primary",
         width="stretch",
-        disabled=not model_ready or not supports_reference,
+        disabled=not model_ready or (not direct and not supports_reference),
     ):
         if image_provider is None:
             st.error("模型配置不完整。")
         else:
             try:
-                with st.spinner("正在通过已连接模型提取黑白线稿……"):
-                    if bool(
+                with _generation_progress(image_provider, "正在生成黑白线稿……"):
+                    if not direct and bool(
                         getattr(image_provider, "requires_public_reference_image", False)
                     ) and (
                         not task.sample_public_url
@@ -1418,12 +1521,15 @@ def _render_line_art_controls(
                                 "或在上传参考图时填写已有公开 URL。"
                             )
                         task = service.publish_sample(task, image_host)
-                    task = service.extract_line_art(
-                        task,
-                        image_provider,
-                        options,
-                        auto_retry_once=auto_retry_once,
-                    )
+                    if direct:
+                        task = service.generate_direct_line_art(task, image_provider, options)
+                    else:
+                        task = service.extract_line_art(
+                            task,
+                            image_provider,
+                            options,
+                            auto_retry_once=auto_retry_once,
+                        )
             except ImageProviderError as exc:
                 _remember_region_blocked_model(image_provider, exc)
                 st.error(str(exc))
@@ -1434,10 +1540,12 @@ def _render_line_art_controls(
 
     quality_ok = bool(task.line_art_quality.get("accepted"))
     if task.line_art_image and not task.line_art_confirmed:
+        if isinstance(image_provider, LocalImageProvider):
+            st.caption("确认前请检查主体是否完整，以及每条糖丝是否只对应一根线。")
         add_to_library = st.checkbox(
             "同时加入已批准样本库",
             value=False,
-            disabled=not quality_ok,
+            disabled=direct or not quality_ok,
             help="默认不加入，且样本库不会自动参与后续生成。",
         )
         allow_quality_override = False
@@ -1554,7 +1662,7 @@ def _remember_region_blocked_model(image_provider: Any | None, error: Exception)
 def _render_stage_one_preview(task: SugarPaintingTask | None) -> None:
     st.markdown("#### 第一阶段结果")
     if task and task.sample_image and Path(task.sample_image).is_file():
-        st.image(task.sample_image, width="stretch")
+        image_viewer(task.sample_image, width="stretch")
         if task.sample_confirmed:
             st.success("糖画样图已确认，可以切换到第二阶段。")
         else:
@@ -1572,14 +1680,14 @@ def _render_stage_two_preview(task: SugarPaintingTask | None) -> None:
     with input_col:
         st.markdown("**输入 · 糖画参考图**")
         if task.sample_image and Path(task.sample_image).is_file():
-            st.image(task.sample_image, width="stretch")
+            image_viewer(task.sample_image, width="stretch")
             st.caption("已确认" if task.sample_confirmed else "等待确认")
         else:
             st.info("尚未载入参考图")
     with output_col:
         st.markdown("**输出 · 单中心线稿**")
         if task.line_art_image and Path(task.line_art_image).is_file():
-            st.image(task.line_art_image, width="stretch")
+            image_viewer(task.line_art_image, width="stretch")
             st.caption("已确认" if task.line_art_confirmed else "等待确认")
         else:
             st.info("尚未提取线稿")
@@ -1597,14 +1705,14 @@ def _render_previews(task: SugarPaintingTask | None) -> None:
     with sample_col:
         st.markdown("**糖画样图**")
         if task.sample_image and Path(task.sample_image).is_file():
-            st.image(task.sample_image, width="stretch")
+            image_viewer(task.sample_image, width="stretch")
             st.caption("已确认" if task.sample_confirmed else "等待确认")
         else:
             st.info("尚未生成样图")
     with line_col:
         st.markdown("**黑白线稿**")
         if task.line_art_image and Path(task.line_art_image).is_file():
-            st.image(task.line_art_image, width="stretch")
+            image_viewer(task.line_art_image, width="stretch")
             st.caption("已确认" if task.line_art_confirmed else "等待确认")
         else:
             st.info("确认样图后才能提取线稿")
@@ -1612,12 +1720,14 @@ def _render_previews(task: SugarPaintingTask | None) -> None:
     if task.line_art_quality:
         _render_quality(task.line_art_quality)
 
-    with st.expander("任务记录", expanded=False):
-        rows = _task_attempt_rows(task)
-        if rows:
+    _render_task_history(task)
+
+
+def _render_task_history(task: SugarPaintingTask) -> None:
+    rows = _task_attempt_rows(task)
+    if rows:
+        with st.expander("任务记录", expanded=False):
             st.dataframe(rows, width="stretch", hide_index=True)
-        task_file = Path(task.sample_image).parent / "task.json" if task.sample_image else task.task_id
-        st.caption(f"任务文件：{task_file}")
 
 
 def _task_attempt_rows(task: SugarPaintingTask) -> list[dict]:
@@ -1626,6 +1736,7 @@ def _task_attempt_rows(task: SugarPaintingTask) -> list[dict]:
     for stage, attempts in (("样图", task.sample_attempts), ("线稿", task.line_art_attempts)):
         for item in attempts:
             quality = item.get("quality") or {}
+            elapsed = (item.get("usage") or {}).get("elapsed_seconds")
             raw_score = quality.get("score")
             score = int(raw_score) if isinstance(raw_score, (int, float)) else None
             rows.append(
@@ -1635,6 +1746,7 @@ def _task_attempt_rows(task: SugarPaintingTask) -> list[dict]:
                     "服务商": item.get("providerId"),
                     "模型": item.get("modelId"),
                     "质量分": score,
+                    "耗时（秒）": float(elapsed) if isinstance(elapsed, (int, float)) else None,
                     "时间": item.get("createdAt"),
                 }
             )

@@ -172,7 +172,7 @@ class AssetLibrary:
 
     def import_file(self,payload,name):
         kind=classify(payload,name)
-        folder={'image':'images','curve':'curves','svg':'curves','trajectory':'trajectories','gcode':'exports','program':'exports'}[kind]
+        folder={'image':'images','curve':'curves','svg':'images','trajectory':'trajectories','gcode':'exports','program':'exports'}[kind]
         safe=re.sub(r'[^\w.\-]+','_',Path(name.replace('\\','/')).name).strip('._') or 'asset'
         destination=self.root/'data'/folder/safe
         self.path(destination.relative_to(self.root))

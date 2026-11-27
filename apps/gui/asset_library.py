@@ -9,9 +9,10 @@ from datetime import datetime
 
 import streamlit as st
 from src.core.assets import AssetLibrary, classify, category
+from apps.gui.image_viewer import image_viewer
 
-LABELS={'image':'图像','curve':'曲线 JSON','svg':'曲线 SVG','trajectory':'轨迹','gcode':'G-code','program':'执行文件'}
-ICONS={'image':':material/image:','curve':':material/polyline:','svg':':material/polyline:','trajectory':':material/route:','gcode':':material/code:','program':':material/code:'}
+LABELS={'image':'图像','curve':'曲线 JSON','svg':'SVG 源图','trajectory':'轨迹','gcode':'G-code','program':'执行文件'}
+ICONS={'image':':material/image:','curve':':material/polyline:','svg':':material/image:','trajectory':':material/route:','gcode':':material/code:','program':':material/code:'}
 
 
 @st.cache_data(show_spinner=False,max_entries=256)
@@ -35,8 +36,12 @@ def preview(payload,name,kind,key=None):
             from apps.gui.trajectory_player import render_trajectory_player
             render_trajectory_player(t,key or 'asset_'+hashlib.sha256(payload).hexdigest()[:16])
             return
-        image=thumbnail(payload,name,kind)
-        if image: st.image(image,width='stretch')
+        image=payload if kind in {'image','svg'} else thumbnail(payload,name,kind)
+        filename=name if kind in {'image','svg'} else Path(name).stem+'.png'
+        if kind=='curve':
+            from src.core.asset_conversion import convert_payload
+            image,filename=convert_payload(payload,name)
+        if image: image_viewer(image,key=key,filename=filename)
         else:
             st.markdown(f"**{LABELS.get(kind,'历史文件')}**")
             st.code(payload.decode('utf-8-sig',errors='replace')[:1800],language='text')
@@ -356,6 +361,29 @@ def _dialog():
                     if st.button('返回素材列表'): go('browse')
 
 
+def _conversion_button(q, lib, idx, item, payload, staged=False):
+    if item['kind'] not in {'svg', 'curve'} or item.get('trash_id'):
+        return
+    identity = hashlib.sha256(item['name'].encode()+payload).hexdigest()
+    results = q.setdefault('conversion_results', {})
+    saved = results.get(identity)
+    if saved:
+        try:lib.read(saved)
+        except (ValueError, OSError):
+            results.pop(identity, None);saved=None
+    label = '转为 JSON 并入库' if item['kind']=='svg' else '转为 SVG 并入库'
+    help_text = '按默认间距采样 SVG 路径，保存曲线 JSON。' if item['kind']=='svg' else '按当前点列导出 SVG 源图，保留坐标和笔顺。'
+    if st.button(label, key='asset_convert_'+q['nonce']+'_'+identity, width='stretch', disabled=bool(saved), help=help_text):
+        try:
+            from src.core.asset_conversion import convert_and_save
+            saved=convert_and_save(lib,item,payload if staged else None)
+            results[identity]=saved
+            idx.refresh();scan.clear()
+        except Exception as exc:
+            st.error(f'转换失败：{exc}')
+    if saved:st.success('已保存：'+saved['name'])
+
+
 def _detail(q,lib,idx,close,go,left):
     target=q.get('target');step=q['step']
     if step=='upload':
@@ -401,6 +429,7 @@ def _detail(q,lib,idx,close,go,left):
     with left:
         if not staged and st.button('在文件夹中显示',icon=':material/folder_open:',key=f"asset_reveal_{q['nonce']}_{number}",disabled=staged,help='打开本机文件夹并选中该文件。上传文件需先确认导入。'):
             _open_local_folder(lib,item=item)
+        _conversion_button(q,lib,idx,item,payload,staged)
         if item['kind']=='trajectory' and not staged and not target and not item.get('trash_id'):
             from src.core.trajectory_speed import edit_payload
             from src.pipeline.trajectory_composition.composer import import_trajectory
